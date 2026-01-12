@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..config.models import WtConfig
 from ..domain.models import WorktreeRecord
@@ -49,7 +49,7 @@ def _build_record(repo_root: str, entry, config: WtConfig, prev: WorktreeRecord 
     behind_main = get_behind_main(entry.path, main_ref) if main_ref else 0
     git_sync = compute_git_sync(upstream, ahead, behind, behind_main)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return WorktreeRecord(
         id=_stable_id(entry.path),
         name=name,

@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -151,7 +151,8 @@ def new(
 
     worktree_root = Path(repo_root) / config.worktrees.root
     worktree_root.mkdir(parents=True, exist_ok=True)
-    path = str(worktree_root / name)
+    path = worktree_root / name
+    path_str = str(path)
     branch = f"wt/{name}"
 
     record = _seed_record(path, name, branch, config)
@@ -160,8 +161,8 @@ def new(
     _record_event(repo_root, record.id, "CreateRequested", "ABSENT", "CREATING")
 
     try:
-        git.add_worktree(repo_root, path, branch, base or config.worktrees.default_base, detached=False)
-        apply_templates(repo_root, path, config)
+        git.add_worktree(repo_root, path_str, branch, base or config.worktrees.default_base, detached=False)
+        apply_templates(repo_root, path_str, config)
         _record_event(repo_root, record.id, "CreateSucceeded", "CREATING", "READY")
     except git.GitError as exc:
         repos.update_worktree_state(repo_root, record.id, lifecycle="BROKEN", last_error=str(exc))
@@ -413,8 +414,8 @@ def _ensure_default_layouts(config: WtConfig) -> None:
     }
 
 
-def _seed_record(path: str, name: str, branch: str, config: WtConfig) -> WorktreeRecord:
-    now = datetime.utcnow()
+def _seed_record(path: Path, name: str, branch: str, config: WtConfig) -> WorktreeRecord:
+    now = datetime.now(timezone.utc)
     return WorktreeRecord(
         id=_stable_id(path),
         name=name,
@@ -439,8 +440,8 @@ def _seed_record(path: str, name: str, branch: str, config: WtConfig) -> Worktre
     )
 
 
-def _stable_id(path: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, path))
+def _stable_id(path: Path) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, str(path)))
 
 
 def _normalize_worktree_name(value: str) -> str:
@@ -467,7 +468,7 @@ def _record_event(
     event = EventRecord(
         id=str(uuid.uuid4()),
         worktree_id=worktree_id,
-        at=datetime.utcnow(),
+        at=datetime.now(timezone.utc),
         type=event_type,
         from_state=from_state,
         to_state=to_state,
@@ -521,7 +522,7 @@ def _open(repo_root: str, record: WorktreeRecord, config: WtConfig, layout: Opti
         console.print(str(exc))
         raise typer.Exit(code=5)
 
-    repos.update_worktree_state(repo_root, record.id, last_accessed_at=datetime.utcnow().isoformat())
+    repos.update_worktree_state(repo_root, record.id, last_accessed_at=datetime.now(timezone.utc).isoformat())
 
     if editor:
         _open_editor(str(record.path), config)

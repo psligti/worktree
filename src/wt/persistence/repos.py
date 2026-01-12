@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 from .db import connect
 from ..domain.models import EventRecord, WorktreeRecord
@@ -65,7 +65,7 @@ def mark_missing_paths(repo_root: str, present_paths: set[str]) -> None:
             if row["path"] not in present_paths:
                 conn.execute(
                     "UPDATE worktrees SET lifecycle = ?, updated_at = ? WHERE id = ?",
-                    ("ABSENT", datetime.utcnow().isoformat(), row["id"]),
+                    ("ABSENT", datetime.now(timezone.utc).isoformat(), row["id"]),
                 )
 
 
@@ -85,7 +85,7 @@ def record_event(repo_root: str, event: EventRecord) -> None:
 def update_worktree_state(repo_root: str, worktree_id: str, **updates: object) -> None:
     if not updates:
         return
-    updates["updated_at"] = datetime.utcnow().isoformat()
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     columns = ", ".join(f"{key} = :{key}" for key in updates.keys())
     updates["id"] = worktree_id
     with connect(repo_root) as conn:

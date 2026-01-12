@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -34,11 +34,11 @@ class WorktreeRecord(BaseModel):
     behind: int = 0
     behind_main: int = 0
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_accessed_at: Optional[datetime] = None
 
     last_error: Optional[str] = None
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class EventRecord(BaseModel):

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
+from ..domain.models import GitSyncState
+
 
 class GitError(RuntimeError):
     pass
@@ -158,7 +160,7 @@ def get_behind_main(path: str, main_ref: str) -> int:
     return int(value) if value else 0
 
 
-def compute_git_sync(upstream: Optional[str], ahead: int, behind: int, behind_main: int) -> Optional[str]:
+def compute_git_sync(upstream: Optional[str], ahead: int, behind: int, behind_main: int) -> GitSyncState | None:
     if upstream is None:
         return "NO_UPSTREAM"
     if ahead > 0 and behind > 0:
@@ -243,16 +245,29 @@ def _split_key_value(token: str) -> tuple[str, Optional[str]]:
 
 
 def _finalize_record(data: dict[str, object]) -> GitWorktreeEntry:
+    branch = _coerce_optional_str(data.get("branch")) if not data.get("detached") else None
     return GitWorktreeEntry(
         path=str(data.get("path", "")),
         head_sha=str(data.get("head_sha", "")),
-        branch=data.get("branch") if not data.get("detached") else None,
+        branch=branch,
         detached=bool(data.get("detached")),
         locked=bool(data.get("locked")),
-        lock_reason=data.get("lock_reason"),
-        prunable=data.get("prunable"),
-        prunable_reason=data.get("prunable_reason"),
+        lock_reason=_coerce_optional_str(data.get("lock_reason")),
+        prunable=_coerce_optional_bool(data.get("prunable")),
+        prunable_reason=_coerce_optional_str(data.get("prunable_reason")),
     )
+
+
+def _coerce_optional_str(value: object | None) -> Optional[str]:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _coerce_optional_bool(value: object | None) -> Optional[bool]:
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _git_c_unquote(value: str) -> str:
