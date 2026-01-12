@@ -12,17 +12,23 @@ def zsh_completion_script() -> str:
         _wt() {
           local -a subcommands
           subcommands=(
-            'create:create a worktree'
-            'list:list worktrees'
-            'show:show worktree details'
-            'path:print worktree path'
+            'init:init repository config'
+            'new:create a worktree'
+            'open:open a worktree'
+            'purpose:set worktree purpose'
+            'runs:list worktree runs'
+            'locks:list worktree locks'
+            'bootstrap:bootstrap worktree'
+            'ls:list worktrees'
+            'sync:sync worktree branch'
+            'land:land worktree branch'
             'lock:lock a worktree'
             'unlock:unlock a worktree'
-            'remove:remove a worktree'
-            'prune:prune stale worktrees'
-            'repair:repair worktrees'
             'run:run command in worktree'
-            'completion:print completion script'
+            'rm:remove a worktree'
+            'reindex:rebuild cache'
+            'doctor:check worktree health'
+            'api:start api server'
             'tui:open TUI'
           )
 
@@ -37,55 +43,86 @@ def zsh_completion_script() -> str:
               ;;
             args)
               case $words[1] in
-                create)
+                init)
+                  _arguments
+                  ;;
+                new)
                   _arguments \
-                    '1:task-id:' \
+                    '1:name:' \
                     '--base[base ref]:ref:' \
-                    '--branch[branch name]:name:' \
-                    '--path[worktree path]:dir:_files -/' \
-                    '--detached[create detached worktree]' \
-                    '--lock[lock worktree after create]' \
-                    '--reason[lock reason]:reason:' \
-                    '--json[json output]'
+                    '--profile[profile name]:profile:' \
+                    '--open[open after create]' \
+                    '--bootstrap[bootstrap after create]' \
+                    '--purpose[purpose text]:text:'
                   ;;
-                list)
+                open)
                   _arguments \
-                    '--porcelain[porcelain output]' \
-                    '--json[json output]' \
-                    '--verbose[verbose output]'
+                    '1:name:($(_wt_tasks))' \
+                    '--layout[tmux layout]:layout:' \
+                    '--editor[open editor]' \
+                    '--no-editor[skip editor]'
                   ;;
-                show)
-                  _arguments '1:task-id:($(_wt_tasks))' '--json[json output]'
+                purpose)
+                  _arguments \
+                    '1:name:($(_wt_tasks))' \
+                    '--clear[clear purpose]' \
+                    '2:purpose:'
                   ;;
-                path)
-                  _arguments '1:task-id:($(_wt_tasks))'
+                runs)
+                  _arguments \
+                    '1:name:($(_wt_tasks))' \
+                    '--limit[limit results]:count:'
+                  ;;
+                locks)
+                  _arguments
+                  ;;
+                bootstrap)
+                  _arguments '1:name:($(_wt_tasks))'
+                  ;;
+                ls)
+                  _arguments '--json[json output]'
+                  ;;
+                sync)
+                  _arguments \
+                    '1:name:($(_wt_tasks))' \
+                    '--strategy[merge or rebase]:strategy:(rebase merge)' \
+                    '--from[base ref]:ref:'
+                  ;;
+                land)
+                  _arguments \
+                    '1:name:($(_wt_tasks))' \
+                    '--strategy[merge or rebase]:strategy:(merge rebase)' \
+                    '--run-checks[run checks]' \
+                    '--cleanup[cleanup after land]'
                   ;;
                 lock)
-                  _arguments '1:task-id:($(_wt_tasks))' '--reason[lock reason]:reason:'
+                  _arguments '1:name:($(_wt_tasks))' '--reason[lock reason]:reason:'
                   ;;
                 unlock)
-                  _arguments '1:task-id:($(_wt_tasks))'
-                  ;;
-                remove)
-                  _arguments '1:task-id:($(_wt_removable_tasks))' '--force[force removal]'
-                  ;;
-                prune)
-                  _arguments '--dry-run[show prune results only]'
-                  ;;
-                repair)
-                  _arguments '1:task-id:($(_wt_tasks))' '--all[repair all worktrees]'
+                  _arguments '1:name:($(_wt_tasks))'
                   ;;
                 run)
                   _arguments \
-                    '1:task-id:($(_wt_tasks))' \
+                    '1:name:($(_wt_tasks))' \
                     '--lock-on-run[lock worktree while command runs]' \
                     '--artifacts[artifacts directory]:dir:_files -/' \
-                    '--json[json output]' \
                     '--[end of wt args]' \
                     '*:command and args:->cmd'
                   ;;
-                completion)
-                  _arguments '1:format:(zsh)'
+                rm)
+                  _arguments '1:name:($(_wt_removable_tasks))' '--force[force removal]'
+                  ;;
+                reindex)
+                  _arguments
+                  ;;
+                doctor)
+                  _arguments
+                  ;;
+                api)
+                  _arguments \
+                    '--host[host]:host:' \
+                    '--port[port]:port:' \
+                    '--reload[reload server]'
                   ;;
                 tui)
                   _arguments
@@ -95,11 +132,11 @@ def zsh_completion_script() -> str:
           esac
         }
 
-        # Dynamic task-id completion from `wt list --json` using python3
+        # Dynamic task-id completion from `wt ls --json` using python3
         _wt_tasks() {
           local data
           if command -v python3 >/dev/null 2>&1; then
-            data=$(wt list --json 2>/dev/null)
+            data=$(wt ls --json 2>/dev/null)
             python3 - <<'PY' "$data"
         import json
         import sys
@@ -117,7 +154,7 @@ def zsh_completion_script() -> str:
         _wt_removable_tasks() {
           local data
           if command -v python3 >/dev/null 2>&1; then
-            data=$(wt list --json 2>/dev/null)
+            data=$(wt ls --json 2>/dev/null)
             python3 - <<'PY' "$data"
         import json
         import sys
