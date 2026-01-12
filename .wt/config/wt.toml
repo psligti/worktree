@@ -1,0 +1,41 @@
+[worktrees]
+root = ".worktrees"
+default_base = "main"
+
+[env]
+kind = "uv"
+venv_dir = ".venv"
+dotenv_file = ".env"
+direnv_file = ".envrc"
+unique_ports = true
+port_keys = ["APP_PORT", "UI_PORT"]
+
+[agent]
+enabled = true
+root_dir = ".agent"
+
+[open]
+editor_cmd = ["pycharm"]
+prefer_tmux = true
+
+[tmux]
+session = "repo"
+default_layout = "single"
+
+[tmux.layouts.single]
+layout = "even-horizontal"
+panes = ["shell"]
+
+[tmux.layouts.two-pane]
+layout = "even-horizontal"
+panes = ["shell", "api"]
+commands = { api = "uv run api:dev" }
+
+[tmux.layouts.three-pane]
+layout = "main-vertical"
+panes = ["shell", "api", "ui"]
+commands = { api = "uv run api:dev", ui = "uv run ui:dev" }
+
+[safety]
+refuse_remove_if_dirty = true
+refuse_remove_if_unpushed = true

@@ -1,0 +1,46 @@
+version: 1
+project:
+  name: "Worktree Orchestrator"
+  repo_root: "."
+settings:
+  branch_prefix: "task"
+  worktree_dir_template: "../{repo}-{story_id}"
+  tmux:
+    session: "repo"
+    window_template: "{story_id}"
+    layout: "tiled"
+    pane_titles:
+      - "editor"
+      - "codex"
+      - "tests"
+      - "git"
+  defaults:
+    test_command: "uv run pytest -q"
+    git_command: "lazygit"
+    editor_command: "nvim ."
+providers:
+  codex:
+    enabled: true
+    start_command_template: "codex"
+    model: "DEFAULT"
+    prompt_mode: "stdin"
+
+epics:
+  - id: "E1"
+    title: "Data Acquisition And Integrity"
+    done: false
+    stories:
+      - id: "E1-S1"
+        title: "Incremental Google Drive ingestion with persisted state."
+        done: false
+        acceptance_criteria:
+          - "State store tracks last processed file version or timestamp."
+          - "Rerun skips unchanged files and processes only new/updated ones."
+          - "Logs include run_id, dataset, file_id, and decision (ingested/skipped)."
+      - id: "E1-S2"
+        title: "Config-driven source settings."
+        done: false
+        acceptance_criteria:
+          - "Config includes Drive folder IDs, file patterns, and local paths."
+          - "Dev/prod profiles switchable without code changes."
+          - "Missing config fails fast with actionable error."

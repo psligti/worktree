@@ -1,0 +1,24 @@
+branch_prefix: "task"
+worktree_dir_template: "../{repo}-{story_id}"
+
+tmux:
+  session: "repo"
+  window_template: "{story_id}"
+  layout: "tiled"
+  pane_titles:
+    - "editor"
+    - "codex"
+    - "tests"
+    - "git"
+
+defaults:
+  test_command: "uv run pytest -q"
+  git_command: "lazygit"
+  editor_command: "nvim ."
+
+providers:
+  codex:
+    enabled: true
+    start_command_template: "codex --model {model}"
+    model: "DEFAULT"
+    prompt_mode: "stdin"

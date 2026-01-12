@@ -1,0 +1,3 @@
+[hooks]
+post_create = ["uv sync"]
+post_switch = ["uv sync"]

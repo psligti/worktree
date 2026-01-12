@@ -1,0 +1,6 @@
+[hooks]
+post_create = ["uv sync", "uv run ui:install"]
+post_switch = ["uv sync"]
+
+[env]
+port_keys = ["APP_PORT", "UI_PORT", "VITE_PORT"]

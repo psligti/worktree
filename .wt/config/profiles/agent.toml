@@ -1,0 +1,3 @@
+[agent]
+enabled = true
+root_dir = ".agent"
