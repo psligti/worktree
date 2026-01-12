@@ -74,7 +74,7 @@ def run_tui() -> None:
         }
         #table {
           border: tall $primary;
-          border-title: "Worktrees";
+          border_title: "Worktrees";
           width: 2fr;
         }
         #side {
@@ -88,19 +88,19 @@ def run_tui() -> None:
           overflow: hidden;
         }
         #details {
-          border-title: "Overview";
+          border_title: "Overview";
         }
         #actions {
-          border-title: "Next Steps";
+          border_title: "Next Steps";
         }
         #log {
-          border-title: "Notes";
+          border_title: "Notes";
         }
         #status {
           padding: 0 2;
           height: 3;
           border: tall $accent;
-          border-title: "Status";
+          border_title: "Status";
         }
         """
 

@@ -64,7 +64,7 @@ def run_tui(
         }
         #table {
           border: tall $primary;
-          border-title: "Stories";
+          border_title: "Stories";
           width: 2fr;
         }
         #side {
@@ -78,19 +78,19 @@ def run_tui(
           overflow: hidden;
         }
         #overview {
-          border-title: "Overview";
+          border_title: "Overview";
         }
         #criteria {
-          border-title: "Acceptance";
+          border_title: "Acceptance";
         }
         #actions {
-          border-title: "Next Steps";
+          border_title: "Next Steps";
         }
         #summary {
           padding: 0 2;
           height: 3;
           border: tall $accent;
-          border-title: "Summary";
+          border_title: "Summary";
         }
         """
 
