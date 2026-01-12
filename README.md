@@ -27,6 +27,7 @@ uv pip install -e .
 ```
 orch bootstrap
 orch list
+orch prompt E1-S1
 orch start E1-S1 --provider codex
 orch attach E1-S1 --pane codex
 orch pause E1-S1

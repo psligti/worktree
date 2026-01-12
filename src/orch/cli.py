@@ -235,6 +235,23 @@ def status_cmd(
             console.print(f"- {item.story_id} {item.title}")
 
 
+@app.command("prompt")
+def prompt_cmd(
+    story_id: str,
+    repo_root: Optional[Path] = typer.Option(None, "--repo-root"),
+    tasks_path: Optional[Path] = typer.Option(None, "--tasks"),
+    session: Optional[str] = typer.Option(None, "--session"),
+) -> None:
+    """Render the prompt for a story."""
+    orch = _build_orchestrator(repo_root, tasks_path, session)
+    try:
+        prompt = orch.render_prompt(story_id)
+    except OrchestratorError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+    console.print(prompt)
+
+
 @app.command("next")
 def next_cmd(
     repo_root: Optional[Path] = typer.Option(None, "--repo-root"),

@@ -107,6 +107,14 @@ class Orchestrator:
                 items.append(item)
         return items
 
+    def render_prompt(self, story_id: str) -> str:
+        tasks_doc = self.task_store.load()
+        config = self._build_project_config(tasks_doc)
+        story = self.task_store.find_story(tasks_doc, story_id)
+        if not story:
+            raise OrchestratorError(f"story not found: {story_id}")
+        return self._build_prompt(story, config)
+
     def start_story(
         self,
         story_id: str,
