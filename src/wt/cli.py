@@ -232,6 +232,58 @@ def purpose_cmd(
     console.print(f"updated purpose for {name}")
 
 
+@app.command("runs")
+def runs_cmd(
+    name: str,
+    limit: int = typer.Option(10, "--limit"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """List recent runs for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    runs = repos.list_runs(repo_root, record.id, limit=limit)
+    if not runs:
+        console.print("no runs recorded")
+        return
+
+    table = Table(title=f"Runs for {name}")
+    table.add_column("started")
+    table.add_column("status")
+    table.add_column("exit")
+    table.add_column("cmd")
+    table.add_column("output")
+    for run in runs:
+        started = run.started_at.isoformat(sep=" ", timespec="minutes")
+        exit_code = "-" if run.exit_code is None else str(run.exit_code)
+        output_path = run.output_path or "-"
+        table.add_row(started, run.status or "-", exit_code, run.cmd, output_path)
+    console.print(table)
+
+
+@app.command("locks")
+def locks_cmd() -> None:
+    """List active worktree locks."""
+    repo_root = _repo_root()
+    init_db(repo_root)
+    locks = repos.list_locks(repo_root)
+    if not locks:
+        console.print("no locks recorded")
+        return
+
+    table = Table(title="Worktree Locks")
+    table.add_column("worktree")
+    table.add_column("owner")
+    table.add_column("locked_at")
+    for lock in locks:
+        locked_at = lock.locked_at.isoformat(sep=" ", timespec="minutes") if lock.locked_at else "-"
+        table.add_row(lock.worktree_id, lock.owner or "-", locked_at)
+    console.print(table)
+
+
 @app.command("bootstrap")
 def bootstrap_cmd(
     name: str,

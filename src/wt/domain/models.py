@@ -52,3 +52,20 @@ class EventRecord(BaseModel):
     cmd: Optional[list[str]] = None
     exit_code: Optional[int] = None
     message: Optional[str] = None
+
+
+class RunRecord(BaseModel):
+    id: str
+    worktree_id: str
+    cmd: str
+    status: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    exit_code: Optional[int] = None
+    output_path: Optional[str] = None
+
+
+class LockRecord(BaseModel):
+    worktree_id: str
+    owner: Optional[str] = None
+    locked_at: Optional[datetime] = None

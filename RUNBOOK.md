@@ -63,6 +63,12 @@ wt run feat-x --lock-on-run -- uv run pytest -q
 wt run feat-x --artifacts .wt/runs -- uv run pytest -q
 ```
 
+## Inspect runs and locks
+```
+wt runs feat-x
+wt locks
+```
+
 ## Remove worktrees
 ```
 wt rm feat-x

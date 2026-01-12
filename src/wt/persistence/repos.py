@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .db import connect
-from ..domain.models import EventRecord, WorktreeRecord
+from ..domain.models import EventRecord, LockRecord, RunRecord, WorktreeRecord
 
 
 def upsert_worktree(conn, record: WorktreeRecord) -> None:
@@ -111,6 +111,12 @@ def clear_lock(repo_root: str, worktree_id: str) -> None:
         conn.execute("DELETE FROM locks WHERE worktree_id = ?", (worktree_id,))
 
 
+def list_locks(repo_root: str) -> list[LockRecord]:
+    with connect(repo_root) as conn:
+        rows = conn.execute("SELECT * FROM locks ORDER BY locked_at DESC").fetchall()
+    return [_lock_from_row(row) for row in rows]
+
+
 def record_run_start(repo_root: str, worktree_id: str, cmd: str) -> str:
     run_id = str(uuid.uuid4())
     started_at = datetime.now(timezone.utc).isoformat()
@@ -137,6 +143,15 @@ def record_run_finish(repo_root: str, run_id: str, exit_code: int, output_path: 
             """,
             (status, ended_at, exit_code, output_path, run_id),
         )
+
+
+def list_runs(repo_root: str, worktree_id: str, limit: int = 10) -> list[RunRecord]:
+    with connect(repo_root) as conn:
+        rows = conn.execute(
+            "SELECT * FROM runs WHERE worktree_id = ? ORDER BY started_at DESC LIMIT ?",
+            (worktree_id, limit),
+        ).fetchall()
+    return [_run_from_row(row) for row in rows]
 
 
 def update_worktree_state(repo_root: str, worktree_id: str, **updates: object) -> None:
@@ -189,3 +204,17 @@ def _event_from_row(row) -> EventRecord:
     if data.get("cmd"):
         data["cmd"] = json.loads(data["cmd"])
     return EventRecord.model_validate(data)
+
+
+def _run_from_row(row) -> RunRecord:
+    if row is None:
+        raise ValueError("missing run row")
+    data = dict(row)
+    return RunRecord.model_validate(data)
+
+
+def _lock_from_row(row) -> LockRecord:
+    if row is None:
+        raise ValueError("missing lock row")
+    data = dict(row)
+    return LockRecord.model_validate(data)

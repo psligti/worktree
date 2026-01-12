@@ -81,25 +81,37 @@ wt purpose <name> [purpose]
 wt purpose <name> --clear
 ```
 
-### 2.12 `wt rm`
+### 2.12 `wt runs`
+List recent runs for a worktree.
+```
+wt runs <name> [--limit 10]
+```
+
+### 2.13 `wt locks`
+List active worktree locks.
+```
+wt locks
+```
+
+### 2.14 `wt rm`
 Remove a worktree with safety checks.
 ```
 wt rm <name> [--force]
 ```
 
-### 2.13 `wt reindex`
+### 2.15 `wt reindex`
 Rebuild DB cache from git worktree list.
 
-### 2.14 `wt doctor`
+### 2.16 `wt doctor`
 Diagnose common issues (missing path, missing venv, missing upstream).
 
-### 2.15 `wt api`
+### 2.17 `wt api`
 Launch the FastAPI server.
 ```
 wt api [--host 127.0.0.1] [--port 8765] [--reload]
 ```
 
-### 2.16 `wt tui`
+### 2.18 `wt tui`
 Launch the Textual TUI.
 
 ## 3. Exit Codes
