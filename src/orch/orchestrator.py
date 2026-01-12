@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional
 
 import yaml
 
@@ -14,6 +14,7 @@ from .models import (
     ConfigDocument,
     DefaultsConfig,
     ProjectConfig,
+    ProviderConfig,
     Story,
     TaskListItem,
     TaskRuntimeState,
@@ -21,8 +22,8 @@ from .models import (
 )
 from .state_store import StateStore
 from .task_store import TaskStore
-from .tmux_service import PaneInfo, TmuxService
-from .worktree_service import WorktreeService
+from .tmux_service import PaneInfo, TmuxService, WindowInfo
+from .worktree_service import WorktreeEntry, WorktreeService
 
 
 class OrchestratorError(RuntimeError):
@@ -156,6 +157,7 @@ class Orchestrator:
                     tmux.send_keys(tests_pane, tests_command, enter=True)
 
         state = self.state_store.load(self.repo_root, config.tmux.session)
+        existing = state.tasks.get(story.id)
         runtime = TaskRuntimeState(
             story_id=story.id,
             branch=branch,
@@ -165,7 +167,7 @@ class Orchestrator:
             agent=agent_state,
             status="active",
             last_action="start",
-            created_at=state.tasks.get(story.id).created_at if story.id in state.tasks else _now(),
+            created_at=existing.created_at if existing and existing.created_at else _now(),
             updated_at=_now(),
             last_action_at=_now(),
         )
@@ -304,7 +306,7 @@ class Orchestrator:
             providers=providers,
         )
         if self.session_override:
-            config.tmux = config.tmux.model_copy(update={\"session\": self.session_override})
+            config.tmux = config.tmux.model_copy(update={"session": self.session_override})
         return config
 
     def _reconcile_story(
@@ -312,8 +314,8 @@ class Orchestrator:
         story: Story,
         config: ProjectConfig,
         tmux_service: TmuxService,
-        windows: Dict[str, object],
-        worktrees: Dict[Path, object],
+        windows: Mapping[str, WindowInfo],
+        worktrees: Mapping[Path, WorktreeEntry],
         state,
     ) -> TaskRuntimeState:
         branch = self._branch_name(config, story)
@@ -363,7 +365,7 @@ class Orchestrator:
         )
         return runtime
 
-    def _resolve_provider(self, config: ProjectConfig, provider_name: Optional[str]) -> tuple[str, object]:
+    def _resolve_provider(self, config: ProjectConfig, provider_name: Optional[str]) -> tuple[str, ProviderConfig]:
         provider_key = provider_name or "codex"
         provider = config.providers.get(provider_key)
         if not provider:

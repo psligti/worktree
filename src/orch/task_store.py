@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import yaml
 
@@ -19,7 +20,9 @@ class TaskStore:
     def load(self) -> TasksDocument:
         if not self.path.exists():
             raise TaskStoreError(f"tasks file not found: {self.path}")
-        data = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+        content = self.path.read_text(encoding="utf-8")
+        normalized = _normalize_yaml_indent(content)
+        data = yaml.safe_load(normalized) or {}
         return TasksDocument.model_validate(data)
 
     def write(self, doc: TasksDocument) -> None:
@@ -56,3 +59,23 @@ class TaskStore:
             if epic.id == epic_id:
                 return epic
         return None
+
+
+def _normalize_yaml_indent(content: str) -> str:
+    dedented = textwrap.dedent(content)
+    lines = dedented.splitlines()
+    if len(lines) < 2:
+        return dedented
+    first_indent = len(lines[0]) - len(lines[0].lstrip())
+    other_indents = [len(line) - len(line.lstrip()) for line in lines[1:] if line.strip()]
+    if first_indent == 0 and other_indents:
+        common = min(other_indents)
+        if common:
+            adjusted = [lines[0]]
+            for line in lines[1:]:
+                if line.startswith(" " * common):
+                    adjusted.append(line[common:])
+                else:
+                    adjusted.append(line.lstrip())
+            return "\n".join(adjusted)
+    return dedented

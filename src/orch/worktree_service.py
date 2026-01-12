@@ -86,7 +86,8 @@ def _parse_worktree_porcelain(output: str) -> List[WorktreeEntry]:
     entries: List[WorktreeEntry] = []
     current: dict[str, str] = {}
     for line in output.splitlines():
-        if not line.strip():
+        line = line.strip()
+        if not line:
             continue
         key, _, value = line.partition(" ")
         if key == "worktree":
