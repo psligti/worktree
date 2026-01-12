@@ -93,7 +93,7 @@ def run_tui(
         def compose(self) -> ComposeResult:
             yield Header()
             with Horizontal(id="main"):
-                self.table = DataTable(id="table", border_title="Stories")
+                self.table = DataTable(id="table")
                 yield self.table
                 with Vertical(id="side"):
                     self.overview = Static(id="overview")

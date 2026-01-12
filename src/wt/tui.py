@@ -112,16 +112,16 @@ def run_tui() -> None:
         def compose(self) -> ComposeResult:
             yield Header()
             with Horizontal(id="main"):
-                self.table = DataTable(id="table", border_title="Worktrees")
+                self.table = DataTable(id="table")
                 yield self.table
                 with Vertical(id="side"):
-                    self.details = Static(id="details", border_title="Overview")
-                    self.actions = Static(id="actions", border_title="Next Steps")
-                    self.log_view = Static(id="log", border_title="Notes")
+                    self.details = Static(id="details")
+                    self.actions = Static(id="actions")
+                    self.log_view = Static(id="log")
                     yield self.details
                     yield self.actions
                     yield self.log_view
-            self.status = Static(id="status", border_title="Status")
+            self.status = Static(id="status")
             yield self.status
             yield Footer()
 
