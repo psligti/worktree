@@ -148,12 +148,13 @@ def new(
 ) -> None:
     """Create a new worktree and optionally bootstrap/open it."""
     repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+
     name = _normalize_worktree_name(name)
     if not name:
         console.print("invalid worktree name")
         raise typer.Exit(code=2)
-    config = _load_config(repo_root, profile)
-    init_db(repo_root)
 
     worktree_root = Path(repo_root) / config.worktrees.root
     worktree_root.mkdir(parents=True, exist_ok=True)
@@ -171,8 +172,7 @@ def new(
         apply_templates(repo_root, path_str, config)
         _record_event(repo_root, record.id, "CreateSucceeded", "CREATING", "READY")
     except git.GitError as exc:
-        repos.update_worktree_state(repo_root, record.id, lifecycle="BROKEN", last_error=str(exc))
-        _record_event(repo_root, record.id, "CreateFailed", "CREATING", "BROKEN", message=str(exc))
+        _record_event(repo_root, record.id, "CreateFailed", "CREATING", "ERROR", message=str(exc))
         raise typer.Exit(code=5)
 
     records = reindex(repo_root, config)
@@ -185,6 +185,56 @@ def new(
         _open(repo_root, record, config, None, editor=True)
 
     console.print(f"created worktree {name}")
+
+
+@app.command("add")
+def add_cmd(
+    name: str,
+    branch: str = typer.Option(..., "--branch"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+    open_window: bool = typer.Option(False, "--open"),
+    bootstrap: bool = typer.Option(False, "--bootstrap"),
+    purpose: Optional[str] = typer.Option(None, "--purpose"),
+) -> None:
+    """Add a worktree for an existing branch."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+
+    name = _normalize_worktree_name(name)
+    if not name:
+        console.print("invalid worktree name")
+        raise typer.Exit(code=2)
+
+    worktree_root = Path(repo_root) / config.worktrees.root
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    path = worktree_root / name
+    path_str = str(path)
+
+    record = _seed_record(path, name, branch, config, purpose)
+    with connect(repo_root) as conn:
+        repos.upsert_worktree(conn, record)
+    _record_event(repo_root, record.id, "CreateRequested", "ABSENT", "CREATING")
+
+    try:
+        git.add_existing_worktree(repo_root, path_str, branch)
+        apply_templates(repo_root, path_str, config)
+        _record_event(repo_root, record.id, "CreateSucceeded", "CREATING", "READY")
+    except git.GitError as exc:
+        _record_event(repo_root, record.id, "CreateFailed", "CREATING", "ERROR", message=str(exc))
+        raise typer.Exit(code=5)
+
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+    _run_hooks("post_create", config.hooks.post_create, repo_root, record.path)
+
+    if bootstrap:
+        _bootstrap(repo_root, record, config)
+    if open_window:
+        _open(repo_root, record, config, None, editor=True)
+
+    console.print(f"added worktree {name} from {branch}")
+
 
 
 @app.command("open")

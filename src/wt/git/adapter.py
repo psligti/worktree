@@ -75,6 +75,10 @@ def add_worktree(
     _run_git(command, cwd=repo_root)
 
 
+def add_existing_worktree(repo_root: str, path: str, branch: str) -> None:
+    _run_git(["worktree", "add", path, branch], cwd=repo_root)
+
+
 def remove_worktree(repo_root: str, path: str, force: bool = False) -> None:
     command = ["worktree", "remove"]
     if force:

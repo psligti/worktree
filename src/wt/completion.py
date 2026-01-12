@@ -14,6 +14,7 @@ def zsh_completion_script() -> str:
           subcommands=(
             'init:init repository config'
             'new:create a worktree'
+            'add:add existing branch'
             'open:open a worktree'
             'purpose:set worktree purpose'
             'runs:list worktree runs'
@@ -53,6 +54,15 @@ def zsh_completion_script() -> str:
                     '--profile[profile name]:profile:' \
                     '--open[open after create]' \
                     '--bootstrap[bootstrap after create]' \
+                    '--purpose[purpose text]:text:'
+                  ;;
+                add)
+                  _arguments \
+                    '1:name:' \
+                    '--branch[branch ref]:ref:' \
+                    '--profile[profile name]:profile:' \
+                    '--open[open after add]' \
+                    '--bootstrap[bootstrap after add]' \
                     '--purpose[purpose text]:text:'
                   ;;
                 open)

@@ -97,6 +97,7 @@ def run_tui() -> None:
             ("q", "quit", "quit"),
             ("r", "refresh", "refresh"),
             ("n", "create", "create"),
+            ("a", "add_existing", "add branch"),
             ("o", "open", "open"),
             ("e", "edit_config", "edit config"),
             ("c", "copy_branch", "copy branch"),
@@ -136,6 +137,7 @@ def run_tui() -> None:
             self._rows: list[WorktreeRecord] = []
             self._repo_root = git.get_repo_root()
             self._pending_init_action: str | None = None
+            self._pending_branch: str | None = None
             if not self._ensure_repo_initialized(after_init="refresh"):
                 return
             self._refresh_data()
@@ -187,6 +189,9 @@ def run_tui() -> None:
 
         def action_create(self) -> None:
             self.app.push_screen(PromptScreen("Worktree name", "feat-x"), self._on_create)
+
+        def action_add_existing(self) -> None:
+            self.app.push_screen(PromptScreen("Branch name", "feature/branch"), self._on_add_branch)
 
         def action_open(self) -> None:
             row = self._get_selected_row()
@@ -287,6 +292,40 @@ def run_tui() -> None:
                 )
                 self.action_refresh()
                 self._set_status(f"created {name}")
+            except git.GitError as exc:
+                self._set_status(str(exc))
+
+        def _on_add_branch(self, value: str | None) -> None:
+            if not value:
+                return
+            branch = value.strip()
+            default_name = _normalize_worktree_name(branch.split("/")[-1])
+            if not default_name:
+                self._set_status("invalid branch name")
+                return
+            self._pending_branch = branch
+            self.app.push_screen(
+                PromptScreen("Worktree name", default_name),
+                self._on_add_branch_name,
+            )
+
+        def _on_add_branch_name(self, value: str | None) -> None:
+            if not value:
+                return
+            branch = self._pending_branch or ""
+            self._pending_branch = None
+            name = _normalize_worktree_name(value)
+            if not name:
+                self._set_status("invalid worktree name")
+                return
+            try:
+                git.add_existing_worktree(
+                    self._repo_root,
+                    str(Path(self._repo_root) / self._config.worktrees.root / name),
+                    branch,
+                )
+                self.action_refresh()
+                self._set_status(f"added {name} from {branch}")
             except git.GitError as exc:
                 self._set_status(str(exc))
 

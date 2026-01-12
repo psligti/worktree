@@ -25,93 +25,102 @@ Create a new worktree.
 wt new <name> [--base <ref>] [--profile <profile>] [--open] [--bootstrap] [--purpose <text>]
 ```
 
-### 2.3 `wt open`
+### 2.3 `wt add`
+Add a worktree from an existing branch.
+```
+wt add <name> --branch <branch> [--open] [--bootstrap] [--purpose <text>]
+```
+
+### 2.4 `wt open`
 Open a worktree in tmux.
 ```
+wt open <name> [--layout <layout>]
+```
+
 wt open <name> [--layout <layout>] [--editor/--no-editor]
 ```
 
-### 2.4 `wt bootstrap`
+### 2.5 `wt bootstrap`
 Bootstrap a worktree.
 ```
 wt bootstrap <name>
 ```
 
-### 2.5 `wt ls`
+### 2.6 `wt ls`
 List worktrees with derived status.
 ```
 wt ls [--json]
 ```
 
-### 2.6 `wt sync`
+### 2.7 `wt sync`
 Bring main changes into the worktree branch.
 ```
 wt sync <name> [--strategy rebase|merge] [--from <ref>]
 ```
 
-### 2.7 `wt land`
+### 2.8 `wt land`
 Merge worktree branch back to main (local merge-first).
 ```
 wt land <name> [--strategy merge|rebase] [--run-checks] [--cleanup]
 ```
 - `--run-checks` runs hook commands/scripts from `.wt/config/hooks.d/run_checks.d` and `hooks.run_checks`.
 
-### 2.8 `wt lock`
+### 2.9 `wt lock`
 Lock a worktree to prevent cleanup.
 ```
 wt lock <name> [--reason <text>]
 ```
 
-### 2.9 `wt unlock`
+### 2.10 `wt unlock`
 Unlock a worktree.
 ```
 wt unlock <name>
 ```
 
-### 2.10 `wt run`
+### 2.11 `wt run`
 Run a command inside the worktree.
 ```
 wt run <name> [--lock-on-run] [--artifacts <dir>] -- <command...>
 ```
 
-### 2.11 `wt purpose`
+### 2.12 `wt purpose`
 View or set the worktree purpose metadata.
 ```
 wt purpose <name> [purpose]
 wt purpose <name> --clear
 ```
 
-### 2.12 `wt runs`
+### 2.13 `wt runs`
 List recent runs for a worktree.
 ```
 wt runs <name> [--limit 10]
 ```
 
-### 2.13 `wt locks`
+### 2.14 `wt locks`
 List active worktree locks.
 ```
 wt locks
 ```
 
-### 2.14 `wt rm`
+### 2.15 `wt rm`
 Remove a worktree with safety checks.
 ```
 wt rm <name> [--force]
 ```
 
-### 2.15 `wt reindex`
+### 2.16 `wt reindex`
 Rebuild DB cache from git worktree list.
 
-### 2.16 `wt doctor`
+### 2.17 `wt doctor`
 Diagnose common issues (missing path, missing venv, missing upstream).
 
-### 2.17 `wt api`
+### 2.18 `wt api`
 Launch the FastAPI server.
 ```
 wt api [--host 127.0.0.1] [--port 8765] [--reload]
 ```
 
-### 2.18 `wt tui`
+### 2.19 `wt tui`
 Launch the Textual TUI.
 
 ## 3. Exit Codes

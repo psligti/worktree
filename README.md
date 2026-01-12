@@ -76,6 +76,7 @@ A state-machine worktree orchestrator with repo-local config, tmux integration, 
 ```
 wt init
 wt new feat-x --bootstrap --open
+wt add feat-x --branch feature/api-cleanup
 wt ls
 wt open feat-x --layout three-pane
 wt sync feat-x --strategy rebase

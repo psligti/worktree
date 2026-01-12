@@ -17,6 +17,7 @@ wt init
 wt new feat-x --bootstrap
 wt new feat-x --bootstrap --open
 wt new feat-x --purpose "API cleanup"
+wt add feat-x --branch feature/api-cleanup
 ```
 
 ## Open in tmux
