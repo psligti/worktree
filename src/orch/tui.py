@@ -64,7 +64,6 @@ def run_tui(
         }
         #table {
           border: tall $primary;
-          border_title: "Stories";
           width: 2fr;
         }
         #side {
@@ -77,20 +76,10 @@ def run_tui(
           height: 1fr;
           overflow: hidden;
         }
-        #overview {
-          border_title: "Overview";
-        }
-        #criteria {
-          border_title: "Acceptance";
-        }
-        #actions {
-          border_title: "Next Steps";
-        }
         #summary {
           padding: 0 2;
           height: 3;
           border: tall $accent;
-          border_title: "Summary";
         }
         """
 
@@ -104,7 +93,7 @@ def run_tui(
         def compose(self) -> ComposeResult:
             yield Header()
             with Horizontal(id="main"):
-                self.table = DataTable(id="table")
+                self.table = DataTable(id="table", border_title="Stories")
                 yield self.table
                 with Vertical(id="side"):
                     self.overview = Static(id="overview")

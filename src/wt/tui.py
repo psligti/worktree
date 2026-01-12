@@ -74,7 +74,6 @@ def run_tui() -> None:
         }
         #table {
           border: tall $primary;
-          border_title: "Worktrees";
           width: 2fr;
         }
         #side {
@@ -87,20 +86,10 @@ def run_tui() -> None:
           height: 1fr;
           overflow: hidden;
         }
-        #details {
-          border_title: "Overview";
-        }
-        #actions {
-          border_title: "Next Steps";
-        }
-        #log {
-          border_title: "Notes";
-        }
         #status {
           padding: 0 2;
           height: 3;
           border: tall $accent;
-          border_title: "Status";
         }
         """
 
@@ -123,16 +112,16 @@ def run_tui() -> None:
         def compose(self) -> ComposeResult:
             yield Header()
             with Horizontal(id="main"):
-                self.table = DataTable(id="table")
+                self.table = DataTable(id="table", border_title="Worktrees")
                 yield self.table
                 with Vertical(id="side"):
-                    self.details = Static(id="details")
-                    self.actions = Static(id="actions")
-                    self.log_view = Static(id="log")
+                    self.details = Static(id="details", border_title="Overview")
+                    self.actions = Static(id="actions", border_title="Next Steps")
+                    self.log_view = Static(id="log", border_title="Notes")
                     yield self.details
                     yield self.actions
                     yield self.log_view
-            self.status = Static(id="status")
+            self.status = Static(id="status", border_title="Status")
             yield self.status
             yield Footer()
 
