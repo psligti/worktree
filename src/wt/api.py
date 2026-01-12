@@ -5,9 +5,11 @@ import shlex
 from dataclasses import dataclass
 from typing import Optional
 
+from .git.adapter import get_repo_root
 from .git_worktree import GitWorktreeError, parse_worktree_porcelain_z, run_git_worktree_list_porcelain_z
 from .metadata import load_metadata
 from .models import GitWorktree
+from .persistence import repos
 from .records import infer_task_id_from_path
 
 
@@ -16,6 +18,7 @@ class WorktreeMetadata:
     task_id: str
     path: str
     branch: Optional[str]
+    purpose: Optional[str]
     head_sha: str
     locked: bool
     lock_reason: Optional[str]
@@ -28,10 +31,12 @@ def list_worktrees() -> list[WorktreeMetadata]:
     raw = run_git_worktree_list_porcelain_z()
     items = parse_worktree_porcelain_z(raw)
     task_map = _load_task_map()
+    purpose_map = _load_purpose_map()
     rows: list[WorktreeMetadata] = []
     for item in items:
         task_id = task_map.get(item.path) or infer_task_id_from_path(item.path)
-        rows.append(_metadata_from_git(item, task_id))
+        purpose = purpose_map.get(item.path)
+        rows.append(_metadata_from_git(item, task_id, purpose))
     return rows
 
 
@@ -41,6 +46,18 @@ def get_worktree_by_task_id(task_id: str) -> WorktreeMetadata:
         if row.task_id == task_id:
             return row
     raise LookupError(f"task-id not found: {task_id}")
+
+
+def _load_purpose_map() -> dict[str, str | None]:
+    try:
+        repo_root = get_repo_root()
+    except GitWorktreeError:
+        return {}
+    try:
+        records = repos.list_worktrees(repo_root)
+    except Exception:
+        return {}
+    return {str(record.path): record.purpose for record in records}
 
 
 def create_worktree(
@@ -73,7 +90,7 @@ def create_worktree(
         item = _find_worktree_by_path(resolved_path)
     except LookupError as exc:
         raise GitWorktreeError(str(exc)) from exc
-    return _metadata_from_git(item, task_id)
+    return _metadata_from_git(item, task_id, None)
 
 
 def lock_worktree(path: str, reason: str) -> None:
@@ -170,11 +187,12 @@ def slugify(value: str) -> str:
     return slug or "task"
 
 
-def _metadata_from_git(item: GitWorktree, task_id: str) -> WorktreeMetadata:
+def _metadata_from_git(item: GitWorktree, task_id: str, purpose: str | None) -> WorktreeMetadata:
     return WorktreeMetadata(
         task_id=task_id,
         path=item.path,
         branch=item.branch if not item.detached else None,
+        purpose=purpose,
         head_sha=item.head_sha,
         locked=item.locked,
         lock_reason=item.lock_reason,

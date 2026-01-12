@@ -25,6 +25,7 @@ class WorktreeMetadataModel(BaseModel):
     task_id: str
     path: str
     branch: Optional[str]
+    purpose: Optional[str]
     head_sha: str
     locked: bool
     lock_reason: Optional[str]
@@ -38,6 +39,7 @@ class WorktreeMetadataModel(BaseModel):
             task_id=metadata.task_id,
             path=metadata.path,
             branch=metadata.branch,
+            purpose=metadata.purpose,
             head_sha=metadata.head_sha,
             locked=metadata.locked,
             lock_reason=metadata.lock_reason,
