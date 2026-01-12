@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -71,12 +72,35 @@ def run_tui() -> None:
         #main {
           height: 1fr;
         }
-        #details, #log {
+        #table {
+          border: tall $primary;
+          border-title: "Worktrees";
+          width: 2fr;
+        }
+        #side {
+          width: 1fr;
+          min-width: 36;
+        }
+        #details, #actions, #log {
           padding: 1 2;
+          border: tall $surface;
+          height: 1fr;
+          overflow: hidden;
+        }
+        #details {
+          border-title: "Overview";
+        }
+        #actions {
+          border-title: "Next Steps";
+        }
+        #log {
+          border-title: "Notes";
         }
         #status {
           padding: 0 2;
-          height: 1;
+          height: 3;
+          border: tall $accent;
+          border-title: "Status";
         }
         """
 
@@ -100,18 +124,25 @@ def run_tui() -> None:
             yield Header()
             with Horizontal(id="main"):
                 self.table = DataTable(id="table")
-                with Vertical():
+                yield self.table
+                with Vertical(id="side"):
                     self.details = Static(id="details")
+                    self.actions = Static(id="actions")
                     self.log_view = Static(id="log")
                     yield self.details
+                    yield self.actions
                     yield self.log_view
-                yield self.table
             self.status = Static(id="status")
             yield self.status
             yield Footer()
 
         def on_mount(self) -> None:
-            self.table.add_columns("name", "branch", "status", "dirty", "sync", "path")
+            self.table.add_column("name", width=16)
+            self.table.add_column("branch", width=18)
+            self.table.add_column("status", width=12)
+            self.table.add_column("dirty", width=5)
+            self.table.add_column("sync", width=11)
+            self.table.add_column("path", width=28)
             self.table.cursor_type = "row"
             self._rows: list[WorktreeRecord] = []
             self._repo_root = git.get_repo_root()
@@ -124,20 +155,11 @@ def run_tui() -> None:
             row = self._get_selected_row()
             if row is None:
                 self.details.update("")
+                self.actions.update("")
                 return
-            details = [
-                f"name: {row.name}",
-                f"path: {row.path}",
-                f"branch: {row.branch or '(detached)'}",
-                f"status: {overall_status(row)}",
-                f"dirty: {row.git_dirty}",
-                f"sync: {row.git_sync or '-'}",
-                f"bootstrap: {row.bootstrap}",
-            ]
-            if row.last_error:
-                details.append(f"last error: {row.last_error}")
-            details.append(f"next: {_next_action(row)}")
-            self.details.update("\n".join(details))
+            self.details.update("\n".join(self._format_details(row)))
+            self.actions.update("\n".join(self._format_actions(row)))
+            self._set_notes(self._format_events(row))
 
         def action_refresh(self) -> None:
             if not self._ensure_repo_initialized(after_init="refresh"):
@@ -160,11 +182,14 @@ def run_tui() -> None:
                     overall_status(row),
                     "yes" if row.git_dirty else "no",
                     row.git_sync or "-",
-                    str(row.path),
+                    _short_path(row.path),
                 )
             if self._rows:
                 self.table.move_cursor(row=0)
-            self.log_view.update("")
+            else:
+                self.details.update("")
+                self.actions.update("")
+                self._set_notes([])
             if config_ok:
                 self._set_status("refreshed")
 
@@ -250,9 +275,10 @@ def run_tui() -> None:
         def action_doctor(self) -> None:
             issues = doctor_check(self._repo_root, self._config)
             if not issues:
-                self._set_status("no issues found")
+                self._set_notes(["No issues found."])
+                self._set_status("doctor report")
                 return
-            self.log_view.update("\n".join(issues))
+            self._set_notes(issues)
             self._set_status("doctor report")
 
         def _on_create(self, value: str | None) -> None:
@@ -275,7 +301,7 @@ def run_tui() -> None:
             except git.GitError as exc:
                 self._set_status(str(exc))
 
-        def _on_remove(self, row: WorktreeRecord, ok: bool) -> None:
+        def _on_remove(self, row: WorktreeRecord, ok: bool | None) -> None:
             if not ok:
                 return
             try:
@@ -297,6 +323,58 @@ def run_tui() -> None:
 
         def _set_status(self, message: str) -> None:
             self.status.update(message)
+
+        def _set_notes(self, lines: list[str]) -> None:
+            if not lines:
+                self.log_view.update("Select a worktree to see notes.")
+                return
+            max_lines = 6
+            trimmed = lines[:max_lines]
+            if len(lines) > max_lines:
+                trimmed.append("…")
+            self.log_view.update("\n".join(trimmed))
+
+        def _format_details(self, row: WorktreeRecord) -> list[str]:
+            purpose = row.purpose or row.name.replace("-", " ")
+            status = overall_status(row)
+            branch = row.branch or "(detached)"
+            last_used = _format_datetime(row.last_accessed_at)
+            lines = [
+                f"name: {row.name}",
+                f"purpose: {purpose}",
+                f"branch: {branch}",
+                f"status: {status}",
+                f"sync: {row.git_sync or '-'} | dirty: {'yes' if row.git_dirty else 'no'}",
+                f"bootstrap: {row.bootstrap} | runtime: {row.runtime}",
+                f"agent: {row.agent}",
+                f"last used: {last_used}",
+                f"path: {row.path}",
+            ]
+            return lines
+
+        def _format_actions(self, row: WorktreeRecord) -> list[str]:
+            next_step = _next_action(row)
+            return [
+                f"next: {next_step}",
+                "shortcuts: o open | b bootstrap | s sync",
+                "          l land | x remove | d doctor",
+                "          c copy branch | p copy path",
+            ]
+
+        def _format_events(self, row: WorktreeRecord) -> list[str]:
+            events = repos.list_events(self._repo_root, row.id, limit=6)
+            if not events:
+                if row.last_error:
+                    return [f"last error: {row.last_error}"]
+                return ["No recent events."]
+            lines = []
+            for event in events:
+                at = _format_datetime(event.at)
+                line = f"{at} {event.type}"
+                if event.message:
+                    line = f"{line} — {event.message}"
+                lines.append(line)
+            return lines
 
         def _copy_to_clipboard(self, text: str) -> bool:
             candidates = [
@@ -451,8 +529,23 @@ refuse_remove_if_unpushed = true
     WorktreeApp().run()
 
 
+def _format_datetime(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+def _short_path(path: Path, max_len: int = 28) -> str:
+    text = str(path)
+    if len(text) <= max_len:
+        return text
+    head_len = max_len - 9
+    return f"{text[:head_len]}…{text[-8:]}"
+
+
 def _next_action(row: WorktreeRecord) -> str:
     status = overall_status(row)
+
     if status == "UNBOOTSTRAPPED":
         return "bootstrap (b)"
     if status in {"BEHIND_MAIN", "DIVERGED"}:
