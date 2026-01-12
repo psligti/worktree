@@ -1,0 +1,14 @@
+.wt/state/
+.wt/logs/
+.wt/cache/
+.worktrees/
+.orch/state.json
+.orch/logs/
+.orch/prompts/
+
+# Editor and build artifacts
+.idea/
+__pycache__/
+*.pyc
+build/
+src/wt.egg-info/
