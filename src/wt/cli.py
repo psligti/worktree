@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import uuid
+import getpass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -17,6 +19,7 @@ from .bootstrap.templates import apply_templates
 from .config.loader import load_config
 from .config.models import TmuxLayoutConfig, WtConfig
 from .domain.models import EventRecord, WorktreeRecord
+from .run_store import save_run_record
 from .domain.status import overall_status
 from .git import adapter as git
 from .ops.doctor import doctor as doctor_check
@@ -77,12 +80,14 @@ DEFAULT_PROFILE_TOML = """
 [hooks]
 post_create = ["uv sync"]
 post_switch = ["uv sync"]
+run_checks = []
 """.strip()
 
 UI_PROFILE_TOML = """
 [hooks]
 post_create = ["uv sync", "uv run ui:install"]
 post_switch = ["uv sync"]
+run_checks = []
 
 [env]
 port_keys = ["APP_PORT", "UI_PORT", "VITE_PORT"]
@@ -139,6 +144,7 @@ def new(
     profile: Optional[str] = typer.Option(None, "--profile"),
     open_window: bool = typer.Option(False, "--open"),
     bootstrap: bool = typer.Option(False, "--bootstrap"),
+    purpose: Optional[str] = typer.Option(None, "--purpose"),
 ) -> None:
     """Create a new worktree and optionally bootstrap/open it."""
     repo_root = _repo_root()
@@ -155,7 +161,7 @@ def new(
     path_str = str(path)
     branch = f"wt/{name}"
 
-    record = _seed_record(path, name, branch, config)
+    record = _seed_record(path, name, branch, config, purpose)
     with connect(repo_root) as conn:
         repos.upsert_worktree(conn, record)
     _record_event(repo_root, record.id, "CreateRequested", "ABSENT", "CREATING")
@@ -171,6 +177,7 @@ def new(
 
     records = reindex(repo_root, config)
     record = _find_record(records, name)
+    _run_hooks("post_create", config.hooks.post_create, repo_root, record.path)
 
     if bootstrap:
         _bootstrap(repo_root, record, config)
@@ -193,7 +200,36 @@ def open_cmd(
     init_db(repo_root)
     records = reindex(repo_root, config)
     record = _find_record(records, name)
+    _run_hooks("post_switch", config.hooks.post_switch, repo_root, record.path)
     _open(repo_root, record, config, layout, editor)
+
+
+@app.command("purpose")
+def purpose_cmd(
+    name: str,
+    purpose: Optional[str] = typer.Argument(None),
+    clear: bool = typer.Option(False, "--clear"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Set or view worktree purpose metadata."""
+    if purpose and clear:
+        console.print("provide a purpose or use --clear")
+        raise typer.Exit(code=2)
+
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if purpose is None and not clear:
+        current = record.purpose or "(not set)"
+        console.print(f"{name}: {current}")
+        return
+
+    value = None if clear else purpose
+    repos.update_worktree_state(repo_root, record.id, purpose=value)
+    console.print(f"updated purpose for {name}")
 
 
 @app.command("bootstrap")
@@ -289,13 +325,14 @@ def land_cmd(
         console.print(f"refusing to land {name}: dirty worktree")
         raise typer.Exit(code=4)
 
+    if run_checks:
+        _run_hooks("run_checks", config.hooks.run_checks, repo_root, record.path)
+
     base_ref = config.worktrees.default_base
     branch = record.branch or f"wt/{name}"
 
     try:
         git.checkout(repo_root, base_ref)
-        if run_checks:
-            console.print("run checks not implemented; skipping")
         if strategy == "merge":
             git.merge_from(repo_root, branch)
         else:
@@ -308,11 +345,130 @@ def land_cmd(
     console.print(f"landed {name} into {base_ref}")
 
     if cleanup:
+        _run_hooks("pre_remove", config.hooks.pre_remove, repo_root, record.path)
         try:
             git.remove_worktree(repo_root, str(record.path), force=False)
         except git.GitError as exc:
             console.print(f"cleanup failed: {exc}")
             raise typer.Exit(code=5)
+
+
+@app.command("lock")
+def lock_cmd(
+    name: str,
+    reason: Optional[str] = typer.Option(None, "--reason"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Lock a worktree to prevent cleanup."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    try:
+        git.lock_worktree(repo_root, str(record.path), reason=reason)
+        repos.upsert_lock(repo_root, record.id, owner=_lock_owner(reason))
+    except git.GitError as exc:
+        _record_event(repo_root, record.id, "LockFailed", None, None, message=str(exc))
+        raise typer.Exit(code=5)
+
+    _record_event(repo_root, record.id, "LockSucceeded", None, None)
+    console.print(f"locked {name}")
+
+
+@app.command("unlock")
+def unlock_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Unlock a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    try:
+        git.unlock_worktree(repo_root, str(record.path))
+        repos.clear_lock(repo_root, record.id)
+    except git.GitError as exc:
+        _record_event(repo_root, record.id, "UnlockFailed", None, None, message=str(exc))
+        raise typer.Exit(code=5)
+
+    _record_event(repo_root, record.id, "UnlockSucceeded", None, None)
+    console.print(f"unlocked {name}")
+
+
+@app.command("run")
+def run_cmd(
+    name: str,
+    command: list[str] = typer.Argument(..., help="Command to run (use -- to separate)."),
+    lock_on_run: bool = typer.Option(False, "--lock-on-run"),
+    artifacts: Optional[Path] = typer.Option(None, "--artifacts"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Run a command inside the worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    started_at = datetime.now(timezone.utc)
+    run_id = repos.record_run_start(repo_root, record.id, shlex.join(command))
+
+    if lock_on_run:
+        git.lock_worktree(repo_root, str(record.path), reason="locked during run")
+        repos.upsert_lock(repo_root, record.id, owner=_lock_owner("run"))
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(record.path),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    finally:
+        if lock_on_run:
+            try:
+                git.unlock_worktree(repo_root, str(record.path))
+                repos.clear_lock(repo_root, record.id)
+            except git.GitError as exc:
+                console.print(f"unlock failed: {exc}")
+
+    output = result.stdout or ""
+    output_path = None
+    if artifacts:
+        artifacts.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        log_path = artifacts / f"{name}-run-{timestamp}.log"
+        log_path.write_text(output, encoding="utf-8")
+        output_path = str(log_path)
+        console.print(f"saved output to {log_path}")
+
+    ended_at = datetime.now(timezone.utc)
+    run_record = {
+        "id": run_id,
+        "worktree_id": record.id,
+        "command": shlex.join(command),
+        "status": "success" if result.returncode == 0 else "failed",
+        "exit_code": result.returncode,
+        "output": output,
+        "output_path": output_path,
+        "started_at": started_at.isoformat(),
+        "ended_at": ended_at.isoformat(),
+    }
+    save_run_record(repo_root, run_id, run_record)
+    repos.record_run_finish(repo_root, run_id, result.returncode, output_path)
+
+    if output:
+        console.print(output.rstrip("\n"))
+
+    if result.returncode != 0:
+        raise typer.Exit(code=result.returncode)
 
 
 @app.command("rm")
@@ -335,6 +491,8 @@ def rm_cmd(
     if config.safety.refuse_remove_if_unpushed and record.ahead > 0 and not force:
         console.print(f"refusing to remove {name}: unpushed commits")
         raise typer.Exit(code=4)
+
+    _run_hooks("pre_remove", config.hooks.pre_remove, repo_root, record.path)
 
     try:
         git.remove_worktree(repo_root, str(record.path), force=force)
@@ -368,6 +526,22 @@ def doctor_cmd(profile: Optional[str] = typer.Option(None, "--profile")) -> None
         return
     for issue in issues:
         console.print(issue)
+
+
+@app.command("api")
+def api_cmd(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8765, "--port"),
+    reload: bool = typer.Option(False, "--reload"),
+) -> None:
+    """Launch the FastAPI server."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("uvicorn is not installed")
+        raise typer.Exit(code=1)
+
+    uvicorn.run("wt.api_server:create_app", host=host, port=port, factory=True, reload=reload)
 
 
 @app.command("tui")
@@ -414,30 +588,29 @@ def _ensure_default_layouts(config: WtConfig) -> None:
     }
 
 
-def _seed_record(path: Path, name: str, branch: str, config: WtConfig) -> WorktreeRecord:
+def _seed_record(
+    path: Path,
+    name: str,
+    branch: str,
+    config: WtConfig,
+    purpose: Optional[str] = None,
+) -> WorktreeRecord:
     now = datetime.now(timezone.utc)
     return WorktreeRecord(
         id=_stable_id(path),
         name=name,
         path=path,
         branch=branch,
-        head_sha=None,
+        purpose=purpose,
         base_ref=config.worktrees.default_base,
         lifecycle="CREATING",
         bootstrap="UNBOOTSTRAPPED",
         agent="DETACHED",
         runtime="STOPPED",
-        git_dirty=False,
-        git_sync=None,
-        upstream=None,
-        ahead=0,
-        behind=0,
-        behind_main=0,
         created_at=now,
-        last_accessed_at=None,
-        last_error=None,
         updated_at=now,
     )
+
 
 
 def _stable_id(path: Path) -> str:
@@ -536,6 +709,68 @@ def _open_editor(path: str, config: WtConfig) -> None:
     subprocess.Popen([*config.open.editor_cmd, path])
 
 
+def _lock_owner(reason: str | None = None) -> str:
+    user = os.environ.get("USER") or getpass.getuser()
+    if reason:
+        return f"{user}:{reason}"
+    return user
+
+
+def _run_hooks(hook_name: str, commands: list[str], repo_root: str, worktree_path: Path) -> None:
+    _run_hook_commands(hook_name, commands, worktree_path)
+    _run_hook_scripts(hook_name, repo_root, worktree_path)
+
+
+def _run_hook_commands(hook_name: str, commands: list[str], cwd: Path) -> None:
+    for command in commands:
+        args = shlex.split(command)
+        if not args:
+            continue
+        result = subprocess.run(
+            args,
+            cwd=str(cwd),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if result.returncode != 0:
+            output = result.stdout.strip()
+            message = f"{hook_name} hook failed: {command}"
+            if output:
+                message = f"{message}\n{output}"
+            console.print(message)
+            raise typer.Exit(code=1)
+
+
+def _run_hook_scripts(hook_name: str, repo_root: str, cwd: Path) -> None:
+    hooks_dir = Path(repo_root) / ".wt" / "config" / "hooks.d" / f"{hook_name}.d"
+    if not hooks_dir.exists():
+        return
+    for script in sorted(hooks_dir.iterdir()):
+        if script.is_dir():
+            continue
+        if os.access(script, os.X_OK):
+            args = [str(script)]
+        else:
+            args = ["/bin/sh", str(script)]
+        result = subprocess.run(
+            args,
+            cwd=str(cwd),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if result.returncode != 0:
+            output = result.stdout.strip()
+            message = f"{hook_name} hook failed: {script.name}"
+            if output:
+                message = f"{message}\n{output}"
+            console.print(message)
+            raise typer.Exit(code=1)
+
+
 def _ensure_repo_layout(repo_root: str) -> None:
     root = Path(repo_root) / ".wt"
     config_dir = root / "config"
@@ -546,6 +781,7 @@ def _ensure_repo_layout(repo_root: str) -> None:
     (hooks_dir / "post_create.d").mkdir(parents=True, exist_ok=True)
     (hooks_dir / "post_switch.d").mkdir(parents=True, exist_ok=True)
     (hooks_dir / "pre_remove.d").mkdir(parents=True, exist_ok=True)
+    (hooks_dir / "run_checks.d").mkdir(parents=True, exist_ok=True)
 
     (templates_dir / "env").mkdir(parents=True, exist_ok=True)
     (templates_dir / "agent").mkdir(parents=True, exist_ok=True)

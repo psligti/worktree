@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
     name TEXT NOT NULL,
     path TEXT NOT NULL UNIQUE,
     branch TEXT,
+    purpose TEXT,
     head_sha TEXT,
     base_ref TEXT,
     lifecycle TEXT NOT NULL,

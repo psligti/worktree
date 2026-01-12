@@ -22,7 +22,7 @@ Initialize `.wt/` config/templates and SQLite schema.
 ### 2.2 `wt new`
 Create a new worktree.
 ```
-wt new <name> [--base <ref>] [--profile <profile>] [--open] [--bootstrap]
+wt new <name> [--base <ref>] [--profile <profile>] [--open] [--bootstrap] [--purpose <text>]
 ```
 
 ### 2.3 `wt open`
@@ -54,20 +54,52 @@ Merge worktree branch back to main (local merge-first).
 ```
 wt land <name> [--strategy merge|rebase] [--run-checks] [--cleanup]
 ```
+- `--run-checks` runs hook commands/scripts from `.wt/config/hooks.d/run_checks.d` and `hooks.run_checks`.
 
-### 2.8 `wt rm`
+### 2.8 `wt lock`
+Lock a worktree to prevent cleanup.
+```
+wt lock <name> [--reason <text>]
+```
+
+### 2.9 `wt unlock`
+Unlock a worktree.
+```
+wt unlock <name>
+```
+
+### 2.10 `wt run`
+Run a command inside the worktree.
+```
+wt run <name> [--lock-on-run] [--artifacts <dir>] -- <command...>
+```
+
+### 2.11 `wt purpose`
+View or set the worktree purpose metadata.
+```
+wt purpose <name> [purpose]
+wt purpose <name> --clear
+```
+
+### 2.12 `wt rm`
 Remove a worktree with safety checks.
 ```
 wt rm <name> [--force]
 ```
 
-### 2.9 `wt reindex`
+### 2.13 `wt reindex`
 Rebuild DB cache from git worktree list.
 
-### 2.10 `wt doctor`
+### 2.14 `wt doctor`
 Diagnose common issues (missing path, missing venv, missing upstream).
 
-### 2.11 `wt tui`
+### 2.15 `wt api`
+Launch the FastAPI server.
+```
+wt api [--host 127.0.0.1] [--port 8765] [--reload]
+```
+
+### 2.16 `wt tui`
 Launch the Textual TUI.
 
 ## 3. Exit Codes
@@ -94,6 +126,7 @@ Launch the Textual TUI.
     "name": { "type": "string" },
     "path": { "type": "string" },
     "branch": { "type": ["string", "null"] },
+    "purpose": { "type": ["string", "null"] },
     "head_sha": { "type": ["string", "null"] },
     "base_ref": { "type": ["string", "null"] },
     "lifecycle": { "type": "string" },

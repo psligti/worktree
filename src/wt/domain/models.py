@@ -19,6 +19,7 @@ class WorktreeRecord(BaseModel):
     name: str
     path: Path
     branch: Optional[str] = None
+    purpose: Optional[str] = None
     head_sha: Optional[str] = None
     base_ref: Optional[str] = None
 

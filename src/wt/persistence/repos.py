@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -14,11 +15,11 @@ def upsert_worktree(conn, record: WorktreeRecord) -> None:
     conn.execute(
         """
         INSERT INTO worktrees (
-            id, name, path, branch, head_sha, base_ref, lifecycle, bootstrap, agent, runtime,
+            id, name, path, branch, purpose, head_sha, base_ref, lifecycle, bootstrap, agent, runtime,
             git_dirty, git_sync, upstream, ahead, behind, behind_main,
             created_at, last_accessed_at, last_error, updated_at
         ) VALUES (
-            :id, :name, :path, :branch, :head_sha, :base_ref, :lifecycle, :bootstrap, :agent, :runtime,
+            :id, :name, :path, :branch, :purpose, :head_sha, :base_ref, :lifecycle, :bootstrap, :agent, :runtime,
             :git_dirty, :git_sync, :upstream, :ahead, :behind, :behind_main,
             :created_at, :last_accessed_at, :last_error, :updated_at
         )
@@ -26,6 +27,7 @@ def upsert_worktree(conn, record: WorktreeRecord) -> None:
             id = excluded.id,
             name = excluded.name,
             branch = excluded.branch,
+            purpose = excluded.purpose,
             head_sha = excluded.head_sha,
             base_ref = excluded.base_ref,
             lifecycle = excluded.lifecycle,
@@ -82,6 +84,61 @@ def record_event(repo_root: str, event: EventRecord) -> None:
         )
 
 
+def list_events(repo_root: str, worktree_id: str, limit: int = 5) -> list[EventRecord]:
+    with connect(repo_root) as conn:
+        rows = conn.execute(
+            "SELECT * FROM events WHERE worktree_id = ? ORDER BY at DESC LIMIT ?",
+            (worktree_id, limit),
+        ).fetchall()
+    return [_event_from_row(row) for row in rows]
+
+
+def upsert_lock(repo_root: str, worktree_id: str, owner: str | None = None) -> None:
+    locked_at = datetime.now(timezone.utc).isoformat()
+    with connect(repo_root) as conn:
+        conn.execute(
+            """
+            INSERT INTO locks (worktree_id, owner, locked_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(worktree_id) DO UPDATE SET owner = excluded.owner, locked_at = excluded.locked_at
+            """,
+            (worktree_id, owner, locked_at),
+        )
+
+
+def clear_lock(repo_root: str, worktree_id: str) -> None:
+    with connect(repo_root) as conn:
+        conn.execute("DELETE FROM locks WHERE worktree_id = ?", (worktree_id,))
+
+
+def record_run_start(repo_root: str, worktree_id: str, cmd: str) -> str:
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc).isoformat()
+    with connect(repo_root) as conn:
+        conn.execute(
+            """
+            INSERT INTO runs (id, worktree_id, cmd, status, started_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (run_id, worktree_id, cmd, "running", started_at),
+        )
+    return run_id
+
+
+def record_run_finish(repo_root: str, run_id: str, exit_code: int, output_path: str | None) -> None:
+    ended_at = datetime.now(timezone.utc).isoformat()
+    status = "success" if exit_code == 0 else "failed"
+    with connect(repo_root) as conn:
+        conn.execute(
+            """
+            UPDATE runs
+            SET status = ?, ended_at = ?, exit_code = ?, output_path = ?
+            WHERE id = ?
+            """,
+            (status, ended_at, exit_code, output_path, run_id),
+        )
+
+
 def update_worktree_state(repo_root: str, worktree_id: str, **updates: object) -> None:
     if not updates:
         return
@@ -123,3 +180,12 @@ def _worktree_from_row(row) -> WorktreeRecord:
     data = dict(row)
     data["path"] = Path(data["path"])
     return WorktreeRecord.model_validate(data)
+
+
+def _event_from_row(row) -> EventRecord:
+    if row is None:
+        raise ValueError("missing event row")
+    data = dict(row)
+    if data.get("cmd"):
+        data["cmd"] = json.loads(data["cmd"])
+    return EventRecord.model_validate(data)

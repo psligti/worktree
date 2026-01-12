@@ -83,6 +83,18 @@ def remove_worktree(repo_root: str, path: str, force: bool = False) -> None:
     _run_git(command, cwd=repo_root)
 
 
+def lock_worktree(repo_root: str, path: str, reason: str | None = None) -> None:
+    command = ["worktree", "lock"]
+    if reason:
+        command.extend(["--reason", reason])
+    command.append(path)
+    _run_git(command, cwd=repo_root)
+
+
+def unlock_worktree(repo_root: str, path: str) -> None:
+    _run_git(["worktree", "unlock", path], cwd=repo_root)
+
+
 def merge_from(path: str, ref: str) -> None:
     _run_git(["-C", path, "merge", ref])
 

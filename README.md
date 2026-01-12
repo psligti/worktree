@@ -61,6 +61,8 @@ A state-machine worktree orchestrator with repo-local config, tmux integration, 
 - One-command worktree setup: create, template, bootstrap, open
 - Repo-local config and templates in `.wt/`
 - Reindexable SQLite cache at `.wt/state/wt.db`
+- Lockable worktrees with purpose metadata and per-worktree runs
+- Optional FastAPI server for worktree metadata
 - TUI for fast browsing and actions
 - tmux windows/panes managed from Python (no AppleScript)
 

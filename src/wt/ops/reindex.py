@@ -55,6 +55,7 @@ def _build_record(repo_root: str, entry, config: WtConfig, prev: WorktreeRecord 
         name=name,
         path=entry.path,
         branch=entry.branch,
+        purpose=prev.purpose if prev else None,
         head_sha=entry.head_sha,
         base_ref=config.worktrees.default_base,
         lifecycle="READY",

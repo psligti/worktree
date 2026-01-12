@@ -16,6 +16,7 @@ wt init
 ```
 wt new feat-x --bootstrap
 wt new feat-x --bootstrap --open
+wt new feat-x --purpose "API cleanup"
 ```
 
 ## Open in tmux
@@ -39,6 +40,27 @@ wt sync feat-x --strategy merge --from origin/main
 ## Land back to main (local merge-first)
 ```
 wt land feat-x --cleanup
+wt land feat-x --run-checks
+```
+- `--run-checks` runs hook commands/scripts from `.wt/config/hooks.d/run_checks.d` and `hooks.run_checks`.
+
+## Worktree purpose
+```
+wt purpose feat-x "API cleanup"
+wt purpose feat-x
+wt purpose feat-x --clear
+```
+
+## Lock/unlock worktrees
+```
+wt lock feat-x --reason "focus work"
+wt unlock feat-x
+```
+
+## Run a command in a worktree
+```
+wt run feat-x --lock-on-run -- uv run pytest -q
+wt run feat-x --artifacts .wt/runs -- uv run pytest -q
 ```
 
 ## Remove worktrees
@@ -51,6 +73,11 @@ wt rm feat-x --force
 ```
 wt reindex
 wt doctor
+```
+
+## API server
+```
+wt api
 ```
 
 ## TUI

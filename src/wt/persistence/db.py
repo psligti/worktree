@@ -31,3 +31,12 @@ def init_db(repo_root: str) -> None:
     schema = schema_path.read_text(encoding="utf-8")
     with connect(repo_root) as conn:
         conn.executescript(schema)
+        _ensure_column(conn, "worktrees", "purpose", "TEXT")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    existing = {row[1] for row in rows}
+    if column in existing:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")

@@ -59,6 +59,7 @@ class HooksConfig(BaseModel):
     post_create: List[str] = Field(default_factory=list)
     post_switch: List[str] = Field(default_factory=list)
     pre_remove: List[str] = Field(default_factory=list)
+    run_checks: List[str] = Field(default_factory=list)
 
 
 class SafetyConfig(BaseModel):
