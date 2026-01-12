@@ -59,6 +59,12 @@ def list_worktrees(repo_root: str) -> list[GitWorktreeEntry]:
     return _parse_worktree_porcelain_z(output)
 
 
+def list_local_branches(repo_root: str) -> list[str]:
+    output = _run_git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=repo_root)
+    text = output.decode("utf-8", "replace")
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
 def add_worktree(
     repo_root: str,
     path: str,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,20 @@ from .ops.reindex import reindex
 from .persistence import repos
 from .persistence.db import init_db
 from .tmux.adapter import TmuxError, ensure_session, focus_window, open_window, setup_layout
+
+
+@dataclass(frozen=True)
+class WorktreeListRow:
+    name: str
+    branch: str
+    status: str
+    dirty: str
+    sync: str
+    path: str
+    record: WorktreeRecord | None
+    kind: str
+    branch_ref: str | None
+
 
 
 def run_tui() -> None:
@@ -134,7 +149,7 @@ def run_tui() -> None:
             self.table.add_column("sync", width=11)
             self.table.add_column("path", width=28)
             self.table.cursor_type = "row"
-            self._rows: list[WorktreeRecord] = []
+            self._rows: list[WorktreeListRow] = []
             self._repo_root = git.get_repo_root()
             self._pending_init_action: str | None = None
             self._pending_branch: str | None = None
@@ -161,19 +176,20 @@ def run_tui() -> None:
             self.table.clear()
             config_ok = self._reload_config()
             try:
-                self._rows = reindex(self._repo_root, self._config)
+                records = reindex(self._repo_root, self._config)
             except git.GitError as exc:
                 self._rows = []
                 self._set_status(str(exc))
                 return
+            self._rows = self._build_rows(records)
             for row in self._rows:
                 self.table.add_row(
                     row.name,
-                    row.branch or "(detached)",
-                    overall_status(row),
-                    "yes" if row.git_dirty else "no",
-                    row.git_sync or "-",
-                    _short_path(row.path),
+                    row.branch,
+                    row.status,
+                    row.dirty,
+                    row.sync,
+                    row.path,
                 )
             if self._rows:
                 self.table.move_cursor(row=0)
@@ -184,6 +200,43 @@ def run_tui() -> None:
             if config_ok:
                 self._set_status("refreshed")
 
+        def _build_rows(self, records: list[WorktreeRecord]) -> list[WorktreeListRow]:
+            rows: list[WorktreeListRow] = []
+            existing_branches = {record.branch for record in records if record.branch}
+            for record in records:
+                rows.append(
+                    WorktreeListRow(
+                        name=record.name,
+                        branch=record.branch or "(detached)",
+                        status=overall_status(record),
+                        dirty="yes" if record.git_dirty else "no",
+                        sync=record.git_sync or "-",
+                        path=_short_path(record.path),
+                        record=record,
+                        kind="worktree",
+                        branch_ref=record.branch,
+                    )
+                )
+
+            for branch in git.list_local_branches(self._repo_root):
+                if branch in existing_branches:
+                    continue
+                rows.append(
+                    WorktreeListRow(
+                        name=branch,
+                        branch=branch,
+                        status="no worktree",
+                        dirty="-",
+                        sync="-",
+                        path="-",
+                        record=None,
+                        kind="branch",
+                        branch_ref=branch,
+                    )
+                )
+
+            return sorted(rows, key=lambda item: item.name.lower())
+
         def action_reindex(self) -> None:
             self.action_refresh()
 
@@ -191,15 +244,25 @@ def run_tui() -> None:
             self.app.push_screen(PromptScreen("Worktree name", "feat-x"), self._on_create)
 
         def action_add_existing(self) -> None:
+            row = self._get_selected_row()
+            if row and row.kind == "branch" and row.branch_ref:
+                default_name = _normalize_worktree_name(row.branch_ref.split("/")[-1])
+                self._pending_branch = row.branch_ref
+                self.app.push_screen(
+                    PromptScreen("Worktree name", default_name),
+                    self._on_add_branch_name,
+                )
+                return
             self.app.push_screen(PromptScreen("Branch name", "feature/branch"), self._on_add_branch)
 
         def action_open(self) -> None:
             row = self._get_selected_row()
-            if row is None:
+            record = self._require_worktree(row, "open")
+            if record is None:
                 return
             try:
-                _open_tmux(self._repo_root, row, self._config)
-                self._set_status(f"opened {row.name}")
+                _open_tmux(self._repo_root, record, self._config)
+                self._set_status(f"opened {record.name}")
             except TmuxError as exc:
                 self._set_status(str(exc))
 
@@ -212,57 +275,64 @@ def run_tui() -> None:
             row = self._get_selected_row()
             if row is None:
                 return
-            if not row.branch:
+            branch = row.branch_ref
+            if not branch:
                 self._set_status("no branch (detached)")
                 return
-            if self._copy_to_clipboard(row.branch):
+            if self._copy_to_clipboard(branch):
                 self._set_status("copied branch")
 
         def action_copy_path(self) -> None:
             row = self._get_selected_row()
-            if row is None:
+            record = self._require_worktree(row, "copy path")
+            if record is None:
                 return
-            if self._copy_to_clipboard(str(row.path)):
+            if self._copy_to_clipboard(str(record.path)):
                 self._set_status("copied path")
 
         def action_bootstrap(self) -> None:
             row = self._get_selected_row()
-            if row is None:
+            record = self._require_worktree(row, "bootstrap")
+            if record is None:
                 return
             try:
-                repos.update_worktree_state(self._repo_root, row.id, bootstrap="BOOTSTRAPPING")
-                bootstrap_worktree(self._repo_root, row, self._config)
-                repos.update_worktree_state(self._repo_root, row.id, bootstrap="BOOTSTRAPPED")
-                self._set_status(f"bootstrapped {row.name}")
+                repos.update_worktree_state(self._repo_root, record.id, bootstrap="BOOTSTRAPPING")
+                bootstrap_worktree(self._repo_root, record, self._config)
+                repos.update_worktree_state(self._repo_root, record.id, bootstrap="BOOTSTRAPPED")
+                self._set_status(f"bootstrapped {record.name}")
             except BootstrapError as exc:
-                repos.update_worktree_state(self._repo_root, row.id, bootstrap="BOOTSTRAP_ERROR", last_error=str(exc))
+                repos.update_worktree_state(self._repo_root, record.id, bootstrap="BOOTSTRAP_ERROR", last_error=str(exc))
                 self._set_status(str(exc))
 
         def action_remove(self) -> None:
             row = self._get_selected_row()
-            if row is None:
+            record = self._require_worktree(row, "remove")
+            if record is None:
                 return
-            self.app.push_screen(ConfirmScreen(f"Remove {row.name}?"), lambda ok: self._on_remove(row, ok))
+            self.app.push_screen(ConfirmScreen(f"Remove {record.name}?"), lambda ok: self._on_remove(record, ok))
 
         def action_sync(self) -> None:
             row = self._get_selected_row()
-            if row is None:
+            record = self._require_worktree(row, "sync")
+            if record is None:
                 return
             try:
-                git.rebase_onto(str(row.path), f"origin/{self._config.worktrees.default_base}")
-                self._set_status(f"synced {row.name}")
+                git.rebase_onto(str(record.path), f"origin/{self._config.worktrees.default_base}")
+                self._set_status(f"synced {record.name}")
                 self.action_refresh()
             except git.GitError as exc:
                 self._set_status(str(exc))
 
         def action_land(self) -> None:
             row = self._get_selected_row()
-            if row is None:
+            record = self._require_worktree(row, "land")
+            if record is None:
                 return
             try:
+                branch = record.branch or f"wt/{record.name}"
                 git.checkout(self._repo_root, self._config.worktrees.default_base)
-                git.merge_from(self._repo_root, row.branch or f"wt/{row.name}")
-                self._set_status(f"landed {row.name}")
+                git.merge_from(self._repo_root, branch)
+                self._set_status(f"landed {record.name}")
             except git.GitError as exc:
                 self._set_status(str(exc))
 
@@ -339,7 +409,7 @@ def run_tui() -> None:
             except git.GitError as exc:
                 self._set_status(str(exc))
 
-        def _get_selected_row(self) -> Optional[WorktreeRecord]:
+        def _get_selected_row(self) -> Optional[WorktreeListRow]:
             if not self._rows:
                 return None
             row_index = self.table.cursor_row
@@ -348,6 +418,14 @@ def run_tui() -> None:
             if row_index >= len(self._rows):
                 return None
             return self._rows[row_index]
+
+        def _require_worktree(self, row: WorktreeListRow | None, action: str) -> WorktreeRecord | None:
+            if row is None:
+                return None
+            if row.record is None:
+                self._set_status(f"{action} requires a worktree; press a to add")
+                return None
+            return row.record
 
         def _set_status(self, message: str) -> None:
             self.status.update(message)
@@ -362,28 +440,40 @@ def run_tui() -> None:
                 trimmed.append("…")
             self.log_view.update("\n".join(trimmed))
 
-        def _format_details(self, row: WorktreeRecord) -> list[str]:
-            purpose = row.purpose or row.name.replace("-", " ")
-            status = overall_status(row)
-            branch = row.branch or "(detached)"
-            last_used = _format_datetime(row.last_accessed_at)
-            lock_info = self._lock_info(row)
+        def _format_details(self, row: WorktreeListRow) -> list[str]:
+            if row.record is None:
+                return [
+                    f"branch: {row.branch}",
+                    "status: no worktree",
+                    "next: add worktree (a)",
+                ]
+            record = row.record
+            purpose = record.purpose or record.name.replace("-", " ")
+            status = overall_status(record)
+            branch = record.branch or "(detached)"
+            last_used = _format_datetime(record.last_accessed_at)
+            lock_info = self._lock_info(record)
             lines = [
-                f"name: {row.name}",
+                f"name: {record.name}",
                 f"purpose: {purpose}",
                 f"branch: {branch}",
                 f"status: {status}",
-                f"sync: {row.git_sync or '-'} | dirty: {'yes' if row.git_dirty else 'no'}",
+                f"sync: {record.git_sync or '-'} | dirty: {'yes' if record.git_dirty else 'no'}",
                 f"lock: {lock_info}",
-                f"bootstrap: {row.bootstrap} | runtime: {row.runtime}",
-                f"agent: {row.agent}",
+                f"bootstrap: {record.bootstrap} | runtime: {record.runtime}",
+                f"agent: {record.agent}",
                 f"last used: {last_used}",
-                f"path: {row.path}",
+                f"path: {record.path}",
             ]
             return lines
 
-        def _format_actions(self, row: WorktreeRecord) -> list[str]:
-            next_step = _next_action(row)
+        def _format_actions(self, row: WorktreeListRow) -> list[str]:
+            if row.record is None:
+                return [
+                    "next: add worktree (a)",
+                    "shortcuts: a add | c copy branch",
+                ]
+            next_step = _next_action(row.record)
             return [
                 f"next: {next_step}",
                 "shortcuts: o open | b bootstrap | s sync",
@@ -391,14 +481,17 @@ def run_tui() -> None:
                 "          c copy branch | p copy path",
             ]
 
-        def _format_notes(self, row: WorktreeRecord) -> list[str]:
+        def _format_notes(self, row: WorktreeListRow) -> list[str]:
+            if row.record is None:
+                return ["Branch only; no worktree yet.", "Press a to add."]
+            record = row.record
             lines: list[str] = []
-            run = self._latest_run(row)
+            run = self._latest_run(record)
             if run:
                 exit_code = "-" if run.exit_code is None else str(run.exit_code)
                 command = _short_text(run.cmd, 36)
                 lines.append(f"run: {run.status or '-'} exit {exit_code} {command}")
-            events = repos.list_events(self._repo_root, row.id, limit=6)
+            events = repos.list_events(self._repo_root, record.id, limit=6)
             for event in events:
                 at = _format_datetime(event.at)
                 line = f"{at} {event.type}"
@@ -406,19 +499,19 @@ def run_tui() -> None:
                     line = f"{line} — {event.message}"
                 lines.append(line)
             if not lines:
-                if row.last_error:
-                    return [f"last error: {row.last_error}"]
+                if record.last_error:
+                    return [f"last error: {record.last_error}"]
                 return ["No recent events."]
             return lines
 
-        def _latest_run(self, row: WorktreeRecord) -> Optional[RunRecord]:
-            runs = repos.list_runs(self._repo_root, row.id, limit=1)
+        def _latest_run(self, record: WorktreeRecord) -> Optional[RunRecord]:
+            runs = repos.list_runs(self._repo_root, record.id, limit=1)
             return runs[0] if runs else None
 
-        def _lock_info(self, row: WorktreeRecord) -> str:
+        def _lock_info(self, record: WorktreeRecord) -> str:
             locks = repos.list_locks(self._repo_root)
             for lock in locks:
-                if lock.worktree_id == row.id:
+                if lock.worktree_id == record.id:
                     return lock.owner or "locked"
             return "none"
 
