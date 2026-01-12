@@ -10,7 +10,7 @@ from .bootstrap.runner import BootstrapError, bootstrap_worktree
 from .cli import _ensure_gitignore, _ensure_repo_layout, _normalize_worktree_name
 from .config.loader import config_root, load_config
 from .config.models import TmuxLayoutConfig
-from .domain.models import WorktreeRecord
+from .domain.models import RunRecord, WorktreeRecord
 from .domain.status import overall_status
 from .git import adapter as git
 from .ops.doctor import doctor as doctor_check
@@ -159,7 +159,7 @@ def run_tui() -> None:
                 return
             self.details.update("\n".join(self._format_details(row)))
             self.actions.update("\n".join(self._format_actions(row)))
-            self._set_notes(self._format_events(row))
+            self._set_notes(self._format_notes(row))
 
         def action_refresh(self) -> None:
             if not self._ensure_repo_initialized(after_init="refresh"):
@@ -339,12 +339,14 @@ def run_tui() -> None:
             status = overall_status(row)
             branch = row.branch or "(detached)"
             last_used = _format_datetime(row.last_accessed_at)
+            lock_info = self._lock_info(row)
             lines = [
                 f"name: {row.name}",
                 f"purpose: {purpose}",
                 f"branch: {branch}",
                 f"status: {status}",
                 f"sync: {row.git_sync or '-'} | dirty: {'yes' if row.git_dirty else 'no'}",
+                f"lock: {lock_info}",
                 f"bootstrap: {row.bootstrap} | runtime: {row.runtime}",
                 f"agent: {row.agent}",
                 f"last used: {last_used}",
@@ -361,20 +363,36 @@ def run_tui() -> None:
                 "          c copy branch | p copy path",
             ]
 
-        def _format_events(self, row: WorktreeRecord) -> list[str]:
+        def _format_notes(self, row: WorktreeRecord) -> list[str]:
+            lines: list[str] = []
+            run = self._latest_run(row)
+            if run:
+                exit_code = "-" if run.exit_code is None else str(run.exit_code)
+                command = _short_text(run.cmd, 36)
+                lines.append(f"run: {run.status or '-'} exit {exit_code} {command}")
             events = repos.list_events(self._repo_root, row.id, limit=6)
-            if not events:
-                if row.last_error:
-                    return [f"last error: {row.last_error}"]
-                return ["No recent events."]
-            lines = []
             for event in events:
                 at = _format_datetime(event.at)
                 line = f"{at} {event.type}"
                 if event.message:
                     line = f"{line} — {event.message}"
                 lines.append(line)
+            if not lines:
+                if row.last_error:
+                    return [f"last error: {row.last_error}"]
+                return ["No recent events."]
             return lines
+
+        def _latest_run(self, row: WorktreeRecord) -> Optional[RunRecord]:
+            runs = repos.list_runs(self._repo_root, row.id, limit=1)
+            return runs[0] if runs else None
+
+        def _lock_info(self, row: WorktreeRecord) -> str:
+            locks = repos.list_locks(self._repo_root)
+            for lock in locks:
+                if lock.worktree_id == row.id:
+                    return lock.owner or "locked"
+            return "none"
 
         def _copy_to_clipboard(self, text: str) -> bool:
             candidates = [
@@ -541,6 +559,12 @@ def _short_path(path: Path, max_len: int = 28) -> str:
         return text
     head_len = max_len - 9
     return f"{text[:head_len]}…{text[-8:]}"
+
+
+def _short_text(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    return f"{text[: max_len - 1]}…"
 
 
 def _next_action(row: WorktreeRecord) -> str:
