@@ -42,14 +42,15 @@ def run_tui() -> None:
     from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 
     class PromptScreen(ModalScreen[str | None]):
-        def __init__(self, prompt: str, placeholder: str = "") -> None:
+        def __init__(self, prompt: str, placeholder: str = "", default: str | None = None) -> None:
             super().__init__()
             self.prompt = prompt
             self.placeholder = placeholder
+            self.default = default
 
         def compose(self) -> ComposeResult:
             yield Static(self.prompt, id="prompt-label")
-            yield Input(placeholder=self.placeholder, id="prompt-input")
+            yield Input(placeholder=self.placeholder, id="prompt-input", value=self.default or "")
             with Horizontal():
                 yield Button("OK", id="prompt-ok", variant="success")
                 yield Button("Cancel", id="prompt-cancel", variant="error")
@@ -57,13 +58,13 @@ def run_tui() -> None:
         def on_button_pressed(self, event: Button.Pressed) -> None:
             if event.button.id == "prompt-ok":
                 value = self.query_one("#prompt-input", Input).value.strip()
-                self.dismiss(value or None)
+                self.dismiss(value or self.default)
             else:
                 self.dismiss(None)
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             value = event.value.strip()
-            self.dismiss(value or None)
+            self.dismiss(value or self.default)
 
     class ConfirmScreen(ModalScreen[bool]):
         def __init__(self, prompt: str) -> None:
@@ -248,7 +249,7 @@ def run_tui() -> None:
                 default_name = _normalize_worktree_name(row.branch_ref.split("/")[-1])
                 self._pending_branch = row.branch_ref
                 self.app.push_screen(
-                    PromptScreen("Worktree name", default_name),
+                    PromptScreen("Worktree name", default_name, default=default_name),
                     self._on_add_branch_name,
                 )
                 return
@@ -377,7 +378,7 @@ def run_tui() -> None:
                 return
             self._pending_branch = branch
             self.app.push_screen(
-                PromptScreen("Worktree name", default_name),
+                PromptScreen("Worktree name", default_name, default=default_name),
                 self._on_add_branch_name,
             )
 
@@ -555,7 +556,7 @@ def run_tui() -> None:
                 return True
             self._pending_init_action = after_init
             self.app.push_screen(
-                PromptScreen("Coding agent command (codex/gemini/copilot)", "codex"),
+                PromptScreen("Coding agent command (codex/gemini/copilot)", "codex", default="codex"),
                 self._on_init_agent_command,
             )
             return False
