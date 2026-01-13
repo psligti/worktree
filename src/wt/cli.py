@@ -26,10 +26,24 @@ from .ops.doctor import doctor as doctor_check
 from .ops.reindex import reindex
 from .persistence import repos
 from .persistence.db import connect, init_db
-from .tmux.adapter import TmuxError, ensure_session, focus_window, open_window, setup_layout
+from .tmux.adapter import (
+    TmuxError,
+    ensure_session,
+    focus_window,
+    has_session,
+    list_panes,
+    list_windows,
+    open_window,
+    select_pane,
+    select_window,
+    setup_layout,
+)
+from .tmux.status import summarize_window
 
 
 app = typer.Typer(add_completion=False)
+tmux_app = typer.Typer(add_completion=False)
+app.add_typer(tmux_app, name="tmux")
 console = Console()
 
 DEFAULT_CONFIG_TOML = """
@@ -168,11 +182,19 @@ def new(
     _record_event(repo_root, record.id, "CreateRequested", "ABSENT", "CREATING")
 
     try:
-        git.add_worktree(repo_root, path_str, branch, base or config.worktrees.default_base, detached=False)
+        git.add_worktree(
+            repo_root,
+            path_str,
+            branch,
+            base or config.worktrees.default_base,
+            detached=False,
+        )
         apply_templates(repo_root, path_str, config)
         _record_event(repo_root, record.id, "CreateSucceeded", "CREATING", "READY")
     except git.GitError as exc:
-        _record_event(repo_root, record.id, "CreateFailed", "CREATING", "ERROR", message=str(exc))
+        _record_event(
+            repo_root, record.id, "CreateFailed", "CREATING", "ERROR", message=str(exc)
+        )
         raise typer.Exit(code=5)
 
     records = reindex(repo_root, config)
@@ -221,7 +243,9 @@ def add_cmd(
         apply_templates(repo_root, path_str, config)
         _record_event(repo_root, record.id, "CreateSucceeded", "CREATING", "READY")
     except git.GitError as exc:
-        _record_event(repo_root, record.id, "CreateFailed", "CREATING", "ERROR", message=str(exc))
+        _record_event(
+            repo_root, record.id, "CreateFailed", "CREATING", "ERROR", message=str(exc)
+        )
         raise typer.Exit(code=5)
 
     records = reindex(repo_root, config)
@@ -234,7 +258,6 @@ def add_cmd(
         _open(repo_root, record, config, None, editor=True)
 
     console.print(f"added worktree {name} from {branch}")
-
 
 
 @app.command("open")
@@ -252,6 +275,128 @@ def open_cmd(
     record = _find_record(records, name)
     _run_hooks("post_switch", config.hooks.post_switch, repo_root, record.path)
     _open(repo_root, record, config, layout, editor)
+
+
+@tmux_app.command("waiting-pane")
+def tmux_waiting_pane_cmd(
+    window: Optional[str] = typer.Option(None, "--window", help="tmux window name"),
+    session: Optional[str] = typer.Option(None, "--session", help="tmux session name"),
+    switch: bool = typer.Option(
+        True, "--switch/--no-switch", help="select the pane in tmux"
+    ),
+    print_pane: bool = typer.Option(False, "--print", help="print pane id if found"),
+) -> None:
+    """Switch to the waiting pane in a tmux window."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, None)
+    session_name = session or _tmux_session_name(repo_root, config)
+    target = None
+    if window:
+        target = f"{session_name}:{window}"
+    elif not os.environ.get("TMUX"):
+        console.print("tmux window required when not running inside tmux")
+        raise typer.Exit(code=2)
+    try:
+        panes = list_panes(target)
+        summary = summarize_window(panes)
+        pane_id = summary.waiting_pane_id
+        if not pane_id:
+            if print_pane:
+                console.print("")
+            return
+        if print_pane:
+            console.print(pane_id)
+            if not switch:
+                return
+        if switch:
+            select_pane(pane_id)
+    except (TmuxError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+
+def _window_tmux_status(session_name: str, window: str) -> tuple[str, Optional[str]]:
+    try:
+        panes = list_panes(f"{session_name}:{window}")
+        summary = summarize_window(panes)
+        return summary.status, summary.waiting_pane_id
+    except (TmuxError, OSError):
+        return "error", None
+
+
+@tmux_app.command("status-line")
+def tmux_status_line_cmd(
+    session: Optional[str] = typer.Option(None, "--session", help="tmux session name"),
+) -> None:
+    """Render a compact tmux status summary."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, None)
+    session_name = session or _tmux_session_name(repo_root, config)
+    if not has_session(session_name):
+        console.print("wt:off")
+        return
+    try:
+        windows = list_windows(session_name)
+    except (TmuxError, OSError):
+        console.print("wt:error")
+        return
+    counts = {"question": 0, "waiting": 0, "busy": 0, "idle": 0, "error": 0}
+    for window in windows:
+        status, _ = _window_tmux_status(session_name, window)
+        counts[status] = counts.get(status, 0) + 1
+    if counts["error"]:
+        console.print("wt:error")
+        return
+    if counts["question"] or counts["waiting"]:
+        parts = []
+        if counts["question"]:
+            parts.append(f"q:{counts['question']}")
+        if counts["waiting"]:
+            parts.append(f"w:{counts['waiting']}")
+        console.print("wt " + " ".join(parts))
+        return
+    if counts["busy"]:
+        console.print("wt:busy")
+        return
+    console.print("wt:idle")
+
+
+@tmux_app.command("next-waiting")
+def tmux_next_waiting_cmd(
+    session: Optional[str] = typer.Option(None, "--session", help="tmux session name"),
+    switch: bool = typer.Option(
+        True, "--switch/--no-switch", help="select the pane in tmux"
+    ),
+    print_target: bool = typer.Option(
+        False, "--print", help="print window:pane if found"
+    ),
+) -> None:
+    """Switch to the next waiting tmux pane across windows."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, None)
+    session_name = session or _tmux_session_name(repo_root, config)
+    if not has_session(session_name):
+        if print_target:
+            console.print("")
+        return
+    try:
+        windows = list_windows(session_name)
+    except (TmuxError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+    for window in windows:
+        status, pane_id = _window_tmux_status(session_name, window)
+        if status in {"question", "waiting"} and pane_id:
+            if print_target:
+                console.print(f"{window}:{pane_id}")
+                if not switch:
+                    return
+            if switch:
+                select_window(session_name, window)
+                select_pane(pane_id)
+            return
+    if print_target:
+        console.print("")
 
 
 @app.command("purpose")
@@ -329,7 +474,11 @@ def locks_cmd() -> None:
     table.add_column("owner")
     table.add_column("locked_at")
     for lock in locks:
-        locked_at = lock.locked_at.isoformat(sep=" ", timespec="minutes") if lock.locked_at else "-"
+        locked_at = (
+            lock.locked_at.isoformat(sep=" ", timespec="minutes")
+            if lock.locked_at
+            else "-"
+        )
         table.add_row(lock.worktree_id, lock.owner or "-", locked_at)
     console.print(table)
 
@@ -349,7 +498,10 @@ def bootstrap_cmd(
 
 
 @app.command("ls")
-def ls_cmd(profile: Optional[str] = typer.Option(None, "--profile"), json_output: bool = typer.Option(False, "--json")) -> None:
+def ls_cmd(
+    profile: Optional[str] = typer.Option(None, "--profile"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
     """List worktrees with derived status."""
     repo_root = _repo_root()
     config = _load_config(repo_root, profile)
@@ -495,7 +647,9 @@ def unlock_cmd(
         git.unlock_worktree(repo_root, str(record.path))
         repos.clear_lock(repo_root, record.id)
     except git.GitError as exc:
-        _record_event(repo_root, record.id, "UnlockFailed", None, None, message=str(exc))
+        _record_event(
+            repo_root, record.id, "UnlockFailed", None, None, message=str(exc)
+        )
         raise typer.Exit(code=5)
 
     _record_event(repo_root, record.id, "UnlockSucceeded", None, None)
@@ -505,7 +659,9 @@ def unlock_cmd(
 @app.command("run")
 def run_cmd(
     name: str,
-    command: list[str] = typer.Argument(..., help="Command to run (use -- to separate)."),
+    command: list[str] = typer.Argument(
+        ..., help="Command to run (use -- to separate)."
+    ),
     lock_on_run: bool = typer.Option(False, "--lock-on-run"),
     artifacts: Optional[Path] = typer.Option(None, "--artifacts"),
     profile: Optional[str] = typer.Option(None, "--profile"),
@@ -599,7 +755,9 @@ def rm_cmd(
     try:
         git.remove_worktree(repo_root, str(record.path), force=force)
     except git.GitError as exc:
-        _record_event(repo_root, record.id, "RemoveFailed", None, None, message=str(exc))
+        _record_event(
+            repo_root, record.id, "RemoveFailed", None, None, message=str(exc)
+        )
         raise typer.Exit(code=5)
 
     _record_event(repo_root, record.id, "RemoveSucceeded", None, "ABSENT")
@@ -643,7 +801,9 @@ def api_cmd(
         console.print("uvicorn is not installed")
         raise typer.Exit(code=1)
 
-    uvicorn.run("wt.api_server:create_app", host=host, port=port, factory=True, reload=reload)
+    uvicorn.run(
+        "wt.api_server:create_app", host=host, port=port, factory=True, reload=reload
+    )
 
 
 @app.command("tui")
@@ -672,11 +832,20 @@ def _load_config(repo_root: str, profile: Optional[str]) -> WtConfig:
     return config
 
 
+def _tmux_session_name(repo_root: str, config: WtConfig) -> str:
+    session = config.tmux.session
+    if session == "repo":
+        return Path(repo_root).name
+    return session
+
+
 def _ensure_default_layouts(config: WtConfig) -> None:
     if config.tmux.layouts:
         return
     config.tmux.layouts = {
-        "single": TmuxLayoutConfig(layout="even-horizontal", panes=["shell"], commands={}),
+        "single": TmuxLayoutConfig(
+            layout="even-horizontal", panes=["shell"], commands={}
+        ),
         "two-pane": TmuxLayoutConfig(
             layout="even-horizontal",
             panes=["shell", "api"],
@@ -712,7 +881,6 @@ def _seed_record(
         created_at=now,
         updated_at=now,
     )
-
 
 
 def _stable_id(path: Path) -> str:
@@ -764,20 +932,39 @@ def _find_record(records: list[WorktreeRecord], name: str) -> WorktreeRecord:
 
 def _bootstrap(repo_root: str, record: WorktreeRecord, config: WtConfig) -> None:
     repos.update_worktree_state(repo_root, record.id, bootstrap="BOOTSTRAPPING")
-    _record_event(repo_root, record.id, "BootstrapRequested", record.bootstrap, "BOOTSTRAPPING")
+    _record_event(
+        repo_root, record.id, "BootstrapRequested", record.bootstrap, "BOOTSTRAPPING"
+    )
     try:
         bootstrap_worktree(repo_root, record, config)
     except BootstrapError as exc:
-        repos.update_worktree_state(repo_root, record.id, bootstrap="BOOTSTRAP_ERROR", last_error=str(exc))
-        _record_event(repo_root, record.id, "BootstrapFailed", "BOOTSTRAPPING", "BOOTSTRAP_ERROR", message=str(exc))
+        repos.update_worktree_state(
+            repo_root, record.id, bootstrap="BOOTSTRAP_ERROR", last_error=str(exc)
+        )
+        _record_event(
+            repo_root,
+            record.id,
+            "BootstrapFailed",
+            "BOOTSTRAPPING",
+            "BOOTSTRAP_ERROR",
+            message=str(exc),
+        )
         raise typer.Exit(code=5)
 
     repos.update_worktree_state(repo_root, record.id, bootstrap="BOOTSTRAPPED")
-    _record_event(repo_root, record.id, "BootstrapSucceeded", "BOOTSTRAPPING", "BOOTSTRAPPED")
+    _record_event(
+        repo_root, record.id, "BootstrapSucceeded", "BOOTSTRAPPING", "BOOTSTRAPPED"
+    )
     console.print(f"bootstrapped {record.name}")
 
 
-def _open(repo_root: str, record: WorktreeRecord, config: WtConfig, layout: Optional[str], editor: bool) -> None:
+def _open(
+    repo_root: str,
+    record: WorktreeRecord,
+    config: WtConfig,
+    layout: Optional[str],
+    editor: bool,
+) -> None:
     layout_name = layout or config.tmux.default_layout
     layout_config = config.tmux.layouts.get(layout_name)
     if not layout_config:
@@ -791,13 +978,21 @@ def _open(repo_root: str, record: WorktreeRecord, config: WtConfig, layout: Opti
     try:
         ensure_session(session)
         window_id = open_window(session, record.name, str(record.path))
-        setup_layout(window_id, str(record.path), layout_config.layout, layout_config.panes, layout_config.commands)
+        setup_layout(
+            window_id,
+            str(record.path),
+            layout_config.layout,
+            layout_config.panes,
+            layout_config.commands,
+        )
         focus_window(window_id, session)
     except TmuxError as exc:
         console.print(str(exc))
         raise typer.Exit(code=5)
 
-    repos.update_worktree_state(repo_root, record.id, last_accessed_at=datetime.now(timezone.utc).isoformat())
+    repos.update_worktree_state(
+        repo_root, record.id, last_accessed_at=datetime.now(timezone.utc).isoformat()
+    )
 
     if editor:
         _open_editor(str(record.path), config)
@@ -818,7 +1013,9 @@ def _lock_owner(reason: str | None = None) -> str:
     return user
 
 
-def _run_hooks(hook_name: str, commands: list[str], repo_root: str, worktree_path: Path) -> None:
+def _run_hooks(
+    hook_name: str, commands: list[str], repo_root: str, worktree_path: Path
+) -> None:
     _run_hook_commands(hook_name, commands, worktree_path)
     _run_hook_scripts(hook_name, repo_root, worktree_path)
 

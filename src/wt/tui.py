@@ -18,7 +18,17 @@ from .ops.doctor import doctor as doctor_check
 from .ops.reindex import reindex
 from .persistence import repos
 from .persistence.db import init_db
-from .tmux.adapter import TmuxError, ensure_session, focus_window, open_window, setup_layout
+from .tmux.adapter import (
+    TmuxError,
+    ensure_session,
+    focus_window,
+    has_session,
+    list_panes,
+    list_windows,
+    open_window,
+    setup_layout,
+)
+from .tmux.status import summarize_window
 
 
 @dataclass(frozen=True)
@@ -26,12 +36,14 @@ class WorktreeListRow:
     name: str
     branch: str
     status: str
+    tmux_status: str
     dirty: str
     sync: str
     path: str
     record: WorktreeRecord | None
     kind: str
     branch_ref: str | None
+    row_key: str
 
 
 
@@ -145,14 +157,18 @@ def run_tui() -> None:
             self.table.add_column("name", width=16)
             self.table.add_column("branch", width=18)
             self.table.add_column("status", width=12)
+            self.table.add_column("tmux", key="tmux", width=10)
             self.table.add_column("dirty", width=5)
             self.table.add_column("sync", width=11)
             self.table.add_column("path", width=28)
             self.table.cursor_type = "row"
             self._rows: list[WorktreeListRow] = []
             self._repo_root = git.get_repo_root()
+            self._status_message = ""
+            self._tmux_status: dict[str, str] = {}
             self._pending_init_action: str | None = None
             self._pending_branch: str | None = None
+            self.set_interval(2, self._refresh_tmux_status)
             if not self._ensure_repo_initialized(after_init="refresh"):
                 return
             self._refresh_data()
@@ -166,6 +182,7 @@ def run_tui() -> None:
             self.details.update("\n".join(self._format_details(row)))
             self.actions.update("\n".join(self._format_actions(row)))
             self._set_notes(self._format_notes(row))
+            self._render_status_bar()
 
         def action_refresh(self) -> None:
             if not self._ensure_repo_initialized(after_init="refresh"):
@@ -190,9 +207,11 @@ def run_tui() -> None:
                     row.name,
                     row.branch,
                     row.status,
+                    row.tmux_status,
                     row.dirty,
                     row.sync,
                     row.path,
+                    key=row.row_key,
                 )
             if self._rows:
                 self.table.move_cursor(row=0)
@@ -210,34 +229,40 @@ def run_tui() -> None:
             }
             for record in records:
                 short_branch = _short_branch(record.branch)
+                row_key = f"worktree:{record.name}"
                 rows.append(
                     WorktreeListRow(
                         name=record.name,
                         branch=short_branch or "(detached)",
                         status=overall_status(record),
+                        tmux_status=self._tmux_status.get(row_key, "-"),
                         dirty="yes" if record.git_dirty else "no",
                         sync=record.git_sync or "-",
                         path=_short_path(record.path),
                         record=record,
                         kind="worktree",
                         branch_ref=short_branch,
+                        row_key=row_key,
                     )
                 )
 
             for branch in git.list_local_branches(self._repo_root):
                 if branch in existing_branches:
                     continue
+                row_key = f"branch:{branch}"
                 rows.append(
                     WorktreeListRow(
                         name=branch,
                         branch=branch,
                         status="no worktree",
+                        tmux_status="-",
                         dirty="-",
                         sync="-",
                         path="-",
                         record=None,
                         kind="branch",
                         branch_ref=branch,
+                        row_key=row_key,
                     )
                 )
 
@@ -434,7 +459,8 @@ def run_tui() -> None:
             return row.record
 
         def _set_status(self, message: str) -> None:
-            self.status.update(message)
+            self._status_message = message
+            self._render_status_bar()
 
         def _set_notes(self, lines: list[str]) -> None:
             if not lines:
@@ -451,6 +477,7 @@ def run_tui() -> None:
                 return [
                     f"branch: {row.branch}",
                     "status: no worktree",
+                    "tmux: -",
                     "next: add worktree (n key)",
                 ]
             record = row.record
@@ -459,11 +486,13 @@ def run_tui() -> None:
             branch = record.branch or "(detached)"
             last_used = _format_datetime(record.last_accessed_at)
             lock_info = self._lock_info(record)
+            tmux_status = self._tmux_status.get(row.row_key, "-")
             lines = [
                 f"name: {record.name}",
                 f"purpose: {purpose}",
                 f"branch: {branch}",
                 f"status: {status}",
+                f"tmux: {tmux_status}",
                 f"sync: {record.git_sync or '-'} | dirty: {'yes' if record.git_dirty else 'no'}",
                 f"lock: {lock_info}",
                 f"bootstrap: {record.bootstrap} | runtime: {record.runtime}",
@@ -671,6 +700,54 @@ refuse_remove_if_unpushed = true
             self._config = config
             return True
 
+        def _render_status_bar(self) -> None:
+            tmux_status = ""
+            row = self._get_selected_row()
+            if row is not None:
+                tmux_value = self._tmux_status.get(row.row_key)
+                if tmux_value:
+                    tmux_status = f"tmux: {tmux_value}"
+            if self._status_message and tmux_status:
+                message = f"{self._status_message} | {tmux_status}"
+            elif tmux_status:
+                message = tmux_status
+            else:
+                message = self._status_message
+            self.status.update(message)
+
+        def _refresh_tmux_status(self) -> None:
+            if not hasattr(self, "_config"):
+                return
+            if not self._rows:
+                return
+            session = _tmux_session_name(self._repo_root, self._config)
+            try:
+                window_names = set(list_windows(session)) if has_session(session) else set()
+            except (TmuxError, OSError):
+                window_names = set()
+            for row in self._rows:
+                status = "-"
+                if row.record is None:
+                    status = "-"
+                elif row.name not in window_names:
+                    status = "none"
+                else:
+                    try:
+                        panes = list_panes(f"{session}:{row.name}")
+                        summary = summarize_window(panes)
+                        status = summary.status
+                    except (TmuxError, OSError):
+                        status = "error"
+                self._tmux_status[row.row_key] = status
+                try:
+                    self.table.update_cell(row.row_key, "tmux", status)
+                except KeyError:
+                    continue
+            row = self._get_selected_row()
+            if row is not None:
+                self.details.update("\n".join(self._format_details(row)))
+            self._render_status_bar()
+
     WorktreeApp().run()
 
 
@@ -714,10 +791,15 @@ def _next_action(row: WorktreeRecord) -> str:
     return "review"
 
 
-def _open_tmux(repo_root: str, row: WorktreeRecord, config) -> None:
+def _tmux_session_name(repo_root: str, config) -> str:
     session = config.tmux.session
     if session == "repo":
-        session = Path(repo_root).name
+        return Path(repo_root).name
+    return session
+
+
+def _open_tmux(repo_root: str, row: WorktreeRecord, config) -> None:
+    session = _tmux_session_name(repo_root, config)
     layout_name = config.tmux.default_layout
     layout_config = config.tmux.layouts.get(layout_name)
     if not layout_config:

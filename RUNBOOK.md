@@ -26,6 +26,12 @@ wt open feat-x
 wt open feat-x --layout three-pane
 ```
 
+## Jump to waiting pane in tmux
+```
+# Example tmux.conf binding (inside a worktree window)
+bind-key W run-shell "wt tmux waiting-pane --switch"
+```
+
 ## List and inspect
 ```
 wt ls

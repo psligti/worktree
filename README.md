@@ -96,3 +96,36 @@ Templates are in `.wt/templates/` and applied on create/bootstrap.
 wt tui
 ```
 Key bindings: `n` create, `o` open, `e` edit config, `c` copy branch, `p` copy path, `b` bootstrap, `s` sync, `l` land, `x` remove, `R` reindex, `d` doctor, `r` refresh, `q` quit.
+
+### tmux status integration
+
+Add the following to your `~/.tmux.conf` (or a shared tmux config file):
+```
+set -g status-right "#(wt tmux status-line)"
+bind-key W run-shell "wt tmux next-waiting"
+```
+The status line renders:
+- `wt:idle` when all agent panes are idle
+- `wt:busy` when any pane is busy
+- `wt q:<n>` / `wt w:<n>` when panes are waiting for user input
+
+`wt tmux next-waiting` jumps to the next pane waiting on input (Codex/Gemini/Copilot/opencode).
+
+To integrate opencode’s idle events, add a plugin that touches `.opencode/idle` when the session goes idle and removes it when the session becomes active again:
+```
+.opencode/plugin/notification.js
+export const NotificationPlugin = async ({ $, worktree }) => {
+  return {
+    event: async ({ event }) => {
+      const marker = `${worktree}/.opencode/idle`
+      if (event.type === "session.idle") {
+        await $`mkdir -p ${worktree}/.opencode && echo idle > ${marker}`
+      }
+      if (event.type === "session.active") {
+        await $`rm -f ${marker}`
+      }
+    },
+  }
+}
+```
+The worktree TUI and tmux status line will treat any pane under that worktree as waiting while the marker exists.
