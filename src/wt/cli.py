@@ -30,12 +30,20 @@ from .tmux.adapter import (
     TmuxError,
     ensure_session,
     focus_window,
+    has_session,
+    list_panes,
+    list_windows,
     open_or_attach_window,
+    select_pane,
+    select_window,
     setup_layout,
 )
+from .tmux.status import summarize_window
 
 
 app = typer.Typer(add_completion=False)
+tmux_app = typer.Typer(add_completion=False)
+app.add_typer(tmux_app, name="tmux")
 console = Console()
 
 DEFAULT_CONFIG_TOML = """
@@ -267,6 +275,128 @@ def open_cmd(
     record = _find_record(records, name)
     _run_hooks("post_switch", config.hooks.post_switch, repo_root, record.path)
     _open(repo_root, record, config, layout, editor)
+
+
+@tmux_app.command("waiting-pane")
+def tmux_waiting_pane_cmd(
+    window: Optional[str] = typer.Option(None, "--window", help="tmux window name"),
+    session: Optional[str] = typer.Option(None, "--session", help="tmux session name"),
+    switch: bool = typer.Option(
+        True, "--switch/--no-switch", help="select the pane in tmux"
+    ),
+    print_pane: bool = typer.Option(False, "--print", help="print pane id if found"),
+) -> None:
+    """Switch to the waiting pane in a tmux window."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, None)
+    session_name = session or _tmux_session_name(repo_root, config)
+    target = None
+    if window:
+        target = f"{session_name}:{window}"
+    elif not os.environ.get("TMUX"):
+        console.print("tmux window required when not running inside tmux")
+        raise typer.Exit(code=2)
+    try:
+        panes = list_panes(target)
+        summary = summarize_window(panes)
+        pane_id = summary.waiting_pane_id
+        if not pane_id:
+            if print_pane:
+                console.print("")
+            return
+        if print_pane:
+            console.print(pane_id)
+            if not switch:
+                return
+        if switch:
+            select_pane(pane_id)
+    except (TmuxError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+
+def _window_tmux_status(session_name: str, window: str) -> tuple[str, Optional[str]]:
+    try:
+        panes = list_panes(f"{session_name}:{window}")
+        summary = summarize_window(panes)
+        return summary.status, summary.waiting_pane_id
+    except (TmuxError, OSError):
+        return "error", None
+
+
+@tmux_app.command("status-line")
+def tmux_status_line_cmd(
+    session: Optional[str] = typer.Option(None, "--session", help="tmux session name"),
+) -> None:
+    """Render a compact tmux status summary."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, None)
+    session_name = session or _tmux_session_name(repo_root, config)
+    if not has_session(session_name):
+        console.print("wt:off")
+        return
+    try:
+        windows = list_windows(session_name)
+    except (TmuxError, OSError):
+        console.print("wt:error")
+        return
+    counts = {"question": 0, "waiting": 0, "busy": 0, "idle": 0, "error": 0}
+    for window in windows:
+        status, _ = _window_tmux_status(session_name, window)
+        counts[status] = counts.get(status, 0) + 1
+    if counts["error"]:
+        console.print("wt:error")
+        return
+    if counts["question"] or counts["waiting"]:
+        parts = []
+        if counts["question"]:
+            parts.append(f"q:{counts['question']}")
+        if counts["waiting"]:
+            parts.append(f"w:{counts['waiting']}")
+        console.print("wt " + " ".join(parts))
+        return
+    if counts["busy"]:
+        console.print("wt:busy")
+        return
+    console.print("wt:idle")
+
+
+@tmux_app.command("next-waiting")
+def tmux_next_waiting_cmd(
+    session: Optional[str] = typer.Option(None, "--session", help="tmux session name"),
+    switch: bool = typer.Option(
+        True, "--switch/--no-switch", help="select the pane in tmux"
+    ),
+    print_target: bool = typer.Option(
+        False, "--print", help="print window:pane if found"
+    ),
+) -> None:
+    """Switch to the next waiting tmux pane across windows."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, None)
+    session_name = session or _tmux_session_name(repo_root, config)
+    if not has_session(session_name):
+        if print_target:
+            console.print("")
+        return
+    try:
+        windows = list_windows(session_name)
+    except (TmuxError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+    for window in windows:
+        status, pane_id = _window_tmux_status(session_name, window)
+        if status in {"question", "waiting"} and pane_id:
+            if print_target:
+                console.print(f"{window}:{pane_id}")
+                if not switch:
+                    return
+            if switch:
+                select_window(session_name, window)
+                select_pane(pane_id)
+            return
+    if print_target:
+        console.print("")
 
 
 @app.command("purpose")
@@ -700,6 +830,13 @@ def _load_config(repo_root: str, profile: Optional[str]) -> WtConfig:
         raise typer.Exit(code=1)
     _ensure_default_layouts(config)
     return config
+
+
+def _tmux_session_name(repo_root: str, config: WtConfig) -> str:
+    session = config.tmux.session
+    if session == "repo":
+        return Path(repo_root).name
+    return session
 
 
 def _ensure_default_layouts(config: WtConfig) -> None:

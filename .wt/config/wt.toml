@@ -18,9 +18,19 @@ root_dir = ".agent"
 editor_cmd = ["pycharm"]
 prefer_tmux = true
 
+[opencode]
+enabled = true
+connection = "codex"
+config_path = ".opencode/config.json"
+
+[opencode.themes]
+codex = []
+copilot = []
+default = []
+
 [tmux]
 session = "repo"
-default_layout = "single"
+default_layout = "agent"
 
 [tmux.layouts.single]
 layout = "even-horizontal"
@@ -35,6 +45,11 @@ commands = { api = "uv run api:dev" }
 layout = "main-vertical"
 panes = ["shell", "api", "ui"]
 commands = { api = "uv run api:dev", ui = "uv run ui:dev" }
+
+[tmux.layouts.agent]
+layout = "main-vertical"
+panes = ["agent", "shell"]
+commands = { agent = "opencode"}
 
 [safety]
 refuse_remove_if_dirty = true
