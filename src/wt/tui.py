@@ -111,8 +111,7 @@ def run_tui() -> None:
         BINDINGS = [
             ("q", "quit", "quit"),
             ("r", "refresh", "refresh"),
-            ("n", "create", "create"),
-            ("a", "add_existing", "add branch"),
+            ("n", "create", "create/add"),
             ("o", "open", "open"),
             ("e", "edit_config", "edit config"),
             ("c", "copy_branch", "copy branch"),
@@ -241,9 +240,6 @@ def run_tui() -> None:
             self.action_refresh()
 
         def action_create(self) -> None:
-            self.app.push_screen(PromptScreen("Worktree name", "feat-x"), self._on_create)
-
-        def action_add_existing(self) -> None:
             row = self._get_selected_row()
             if row and row.kind == "branch" and row.branch_ref:
                 default_name = _normalize_worktree_name(row.branch_ref.split("/")[-1])
@@ -253,6 +249,9 @@ def run_tui() -> None:
                     self._on_add_branch_name,
                 )
                 return
+            self.app.push_screen(PromptScreen("Worktree name", "feat-x"), self._on_create)
+
+        def action_add_existing(self) -> None:
             self.app.push_screen(PromptScreen("Branch name", "feature/branch"), self._on_add_branch)
 
         def action_open(self) -> None:
@@ -445,7 +444,7 @@ def run_tui() -> None:
                 return [
                     f"branch: {row.branch}",
                     "status: no worktree",
-                    "next: add worktree (a)",
+                    "next: add worktree (n key)",
                 ]
             record = row.record
             purpose = record.purpose or record.name.replace("-", " ")
@@ -470,8 +469,8 @@ def run_tui() -> None:
         def _format_actions(self, row: WorktreeListRow) -> list[str]:
             if row.record is None:
                 return [
-                    "next: add worktree (a)",
-                    "shortcuts: a add | c copy branch",
+                    "next: add worktree (n key)",
+                    "shortcuts: n add | c copy branch",
                 ]
             next_step = _next_action(row.record)
             return [
