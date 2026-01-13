@@ -201,19 +201,22 @@ def run_tui() -> None:
 
         def _build_rows(self, records: list[WorktreeRecord]) -> list[WorktreeListRow]:
             rows: list[WorktreeListRow] = []
-            existing_branches = {record.branch for record in records if record.branch}
+            existing_branches = {
+                _short_branch(record.branch) for record in records if record.branch
+            }
             for record in records:
+                short_branch = _short_branch(record.branch)
                 rows.append(
                     WorktreeListRow(
                         name=record.name,
-                        branch=record.branch or "(detached)",
+                        branch=short_branch or "(detached)",
                         status=overall_status(record),
                         dirty="yes" if record.git_dirty else "no",
                         sync=record.git_sync or "-",
                         path=_short_path(record.path),
                         record=record,
                         kind="worktree",
-                        branch_ref=record.branch,
+                        branch_ref=short_branch,
                     )
                 )
 
@@ -685,6 +688,14 @@ def _short_text(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return f"{text[: max_len - 1]}…"
+
+
+def _short_branch(branch: str | None) -> str | None:
+    if not branch:
+        return None
+    if branch.startswith("refs/heads/"):
+        return branch[len("refs/heads/") :]
+    return branch
 
 
 def _next_action(row: WorktreeRecord) -> str:
