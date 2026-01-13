@@ -18,7 +18,13 @@ from .ops.doctor import doctor as doctor_check
 from .ops.reindex import reindex
 from .persistence import repos
 from .persistence.db import init_db
-from .tmux.adapter import TmuxError, ensure_session, focus_window, open_window, setup_layout
+from .tmux.adapter import (
+    TmuxError,
+    ensure_session,
+    focus_window,
+    open_or_attach_window,
+    setup_layout,
+)
 
 
 @dataclass(frozen=True)
@@ -34,7 +40,6 @@ class WorktreeListRow:
     branch_ref: str | None
 
 
-
 def run_tui() -> None:
     from textual.app import App, ComposeResult
     from textual.containers import Horizontal, Vertical
@@ -42,7 +47,9 @@ def run_tui() -> None:
     from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 
     class PromptScreen(ModalScreen[str | None]):
-        def __init__(self, prompt: str, placeholder: str = "", default: str | None = None) -> None:
+        def __init__(
+            self, prompt: str, placeholder: str = "", default: str | None = None
+        ) -> None:
             super().__init__()
             self.prompt = prompt
             self.placeholder = placeholder
@@ -50,7 +57,11 @@ def run_tui() -> None:
 
         def compose(self) -> ComposeResult:
             yield Static(self.prompt, id="prompt-label")
-            yield Input(placeholder=self.placeholder, id="prompt-input", value=self.default or "")
+            yield Input(
+                placeholder=self.placeholder,
+                id="prompt-input",
+                value=self.default or "",
+            )
             with Horizontal():
                 yield Button("OK", id="prompt-ok", variant="success")
                 yield Button("Cancel", id="prompt-cancel", variant="error")
@@ -157,7 +168,9 @@ def run_tui() -> None:
                 return
             self._refresh_data()
 
-        def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        def on_data_table_row_highlighted(
+            self, event: DataTable.RowHighlighted
+        ) -> None:
             row = self._get_selected_row()
             if row is None:
                 self.details.update("")
@@ -256,10 +269,14 @@ def run_tui() -> None:
                     self._on_add_branch_name,
                 )
                 return
-            self.app.push_screen(PromptScreen("Worktree name", "feat-x"), self._on_create)
+            self.app.push_screen(
+                PromptScreen("Worktree name", "feat-x"), self._on_create
+            )
 
         def action_add_existing(self) -> None:
-            self.app.push_screen(PromptScreen("Branch name", "feature/branch"), self._on_add_branch)
+            self.app.push_screen(
+                PromptScreen("Branch name", "feature/branch"), self._on_add_branch
+            )
 
         def action_open(self) -> None:
             row = self._get_selected_row()
@@ -302,12 +319,21 @@ def run_tui() -> None:
             if record is None:
                 return
             try:
-                repos.update_worktree_state(self._repo_root, record.id, bootstrap="BOOTSTRAPPING")
+                repos.update_worktree_state(
+                    self._repo_root, record.id, bootstrap="BOOTSTRAPPING"
+                )
                 bootstrap_worktree(self._repo_root, record, self._config)
-                repos.update_worktree_state(self._repo_root, record.id, bootstrap="BOOTSTRAPPED")
+                repos.update_worktree_state(
+                    self._repo_root, record.id, bootstrap="BOOTSTRAPPED"
+                )
                 self._set_status(f"bootstrapped {record.name}")
             except BootstrapError as exc:
-                repos.update_worktree_state(self._repo_root, record.id, bootstrap="BOOTSTRAP_ERROR", last_error=str(exc))
+                repos.update_worktree_state(
+                    self._repo_root,
+                    record.id,
+                    bootstrap="BOOTSTRAP_ERROR",
+                    last_error=str(exc),
+                )
                 self._set_status(str(exc))
 
         def action_remove(self) -> None:
@@ -315,7 +341,10 @@ def run_tui() -> None:
             record = self._require_worktree(row, "remove")
             if record is None:
                 return
-            self.app.push_screen(ConfirmScreen(f"Remove {record.name}?"), lambda ok: self._on_remove(record, ok))
+            self.app.push_screen(
+                ConfirmScreen(f"Remove {record.name}?"),
+                lambda ok: self._on_remove(record, ok),
+            )
 
         def action_sync(self) -> None:
             row = self._get_selected_row()
@@ -323,7 +352,9 @@ def run_tui() -> None:
             if record is None:
                 return
             try:
-                git.rebase_onto(str(record.path), f"origin/{self._config.worktrees.default_base}")
+                git.rebase_onto(
+                    str(record.path), f"origin/{self._config.worktrees.default_base}"
+                )
                 self._set_status(f"synced {record.name}")
                 self.action_refresh()
             except git.GitError as exc:
@@ -425,7 +456,9 @@ def run_tui() -> None:
                 return None
             return self._rows[row_index]
 
-        def _require_worktree(self, row: WorktreeListRow | None, action: str) -> WorktreeRecord | None:
+        def _require_worktree(
+            self, row: WorktreeListRow | None, action: str
+        ) -> WorktreeRecord | None:
             if row is None:
                 return None
             if row.record is None:
@@ -559,7 +592,11 @@ def run_tui() -> None:
                 return True
             self._pending_init_action = after_init
             self.app.push_screen(
-                PromptScreen("Coding agent command (codex/gemini/copilot)", "codex", default="codex"),
+                PromptScreen(
+                    "Coding agent command (codex/gemini/copilot)",
+                    "codex",
+                    default="codex",
+                ),
                 self._on_init_agent_command,
             )
             return False
@@ -584,7 +621,9 @@ def run_tui() -> None:
             config_path = Path(config_root(self._repo_root)) / "wt.toml"
             if not config_path.exists():
                 config_path.parent.mkdir(parents=True, exist_ok=True)
-                config_path.write_text(self._build_wizard_config(agent_cmd), encoding="utf-8")
+                config_path.write_text(
+                    self._build_wizard_config(agent_cmd), encoding="utf-8"
+                )
             try:
                 _ensure_repo_layout(self._repo_root)
                 _ensure_gitignore(self._repo_root)
@@ -605,14 +644,18 @@ def run_tui() -> None:
                 self._set_status("open.editor_cmd is not set")
                 return
             try:
-                subprocess.Popen([*self._config.open.editor_cmd, str(config_dir)], cwd=self._repo_root)
+                subprocess.Popen(
+                    [*self._config.open.editor_cmd, str(config_dir)],
+                    cwd=self._repo_root,
+                )
                 self._set_status("opened config in editor")
             except OSError as exc:
                 self._set_status(str(exc))
 
         def _build_wizard_config(self, agent_cmd: str) -> str:
             agent_cmd = agent_cmd.replace("\\", "\\\\").replace('"', '\\"')
-            return f"""
+            return (
+                f"""
 [worktrees]
 root = ".worktrees"
 default_base = "main"
@@ -659,7 +702,9 @@ commands = {{ api = "uv run api:dev", ui = "uv run ui:dev" }}
 [safety]
 refuse_remove_if_dirty = true
 refuse_remove_if_unpushed = true
-""".strip() + "\n"
+""".strip()
+                + "\n"
+            )
 
         def _reload_config(self) -> bool:
             try:
@@ -722,9 +767,25 @@ def _open_tmux(repo_root: str, row: WorktreeRecord, config) -> None:
     layout_config = config.tmux.layouts.get(layout_name)
     if not layout_config:
         layout_config = list(config.tmux.layouts.values())[0]
+
+    # Create unique window name: project/branch or project/task
+    project_name = Path(repo_root).name
+    window_name = f"{project_name}/{row.branch or row.purpose or row.name}"
+
     ensure_session(session)
-    window_id = open_window(session, row.name, str(row.path))
-    setup_layout(window_id, str(row.path), layout_config.layout, layout_config.panes, layout_config.commands)
+    window_id, is_new = open_or_attach_window(session, window_name, str(row.path))
+
+    # Only setup layout if this is a new window
+    if is_new:
+        setup_layout(
+            window_id,
+            str(row.path),
+            layout_config.layout,
+            layout_config.panes,
+            layout_config.commands,
+            window_name,
+        )
+
     focus_window(window_id, session)
 
 
@@ -732,7 +793,9 @@ def _ensure_default_layouts(config) -> None:
     if config.tmux.layouts:
         return
     config.tmux.layouts = {
-        "single": TmuxLayoutConfig(layout="even-horizontal", panes=["shell"], commands={}),
+        "single": TmuxLayoutConfig(
+            layout="even-horizontal", panes=["shell"], commands={}
+        ),
         "two-pane": TmuxLayoutConfig(
             layout="even-horizontal",
             panes=["shell", "api"],

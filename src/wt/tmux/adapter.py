@@ -21,6 +21,25 @@ def ensure_session(session: str) -> None:
     _run(["tmux", "new-session", "-d", "-s", session])
 
 
+def find_window(session: str, name: str) -> str | None:
+    """Find a window by name in a session. Returns window_id if found, None otherwise."""
+    result = subprocess.run(
+        ["tmux", "list-windows", "-t", session, "-F", "#{window_id}:#{window_name}"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        return None
+
+    for line in result.stdout.decode("utf-8", "replace").splitlines():
+        if line.strip():
+            window_id, window_name = line.strip().split(":", 1)
+            if window_name == name:
+                return window_id
+    return None
+
+
 def open_window(session: str, name: str, path: str) -> str:
     result = subprocess.run(
         [
@@ -45,7 +64,27 @@ def open_window(session: str, name: str, path: str) -> str:
     return result.stdout.decode("utf-8", "replace").strip()
 
 
-def setup_layout(window_id: str, path: str, layout: str, panes: list[str], commands: dict[str, str]) -> None:
+def open_or_attach_window(session: str, name: str, path: str) -> tuple[str, bool]:
+    """
+    Open or attach to a window.
+    Returns (window_id, is_new) where is_new is True if a new window was created.
+    """
+    existing_window_id = find_window(session, name)
+    if existing_window_id:
+        return existing_window_id, False
+
+    window_id = open_window(session, name, path)
+    return window_id, True
+
+
+def setup_layout(
+    window_id: str,
+    path: str,
+    layout: str,
+    panes: list[str],
+    commands: dict[str, str],
+    window_name: str = "",
+) -> None:
     for _ in range(max(0, len(panes) - 1)):
         _run(["tmux", "split-window", "-t", window_id, "-c", path])
 
@@ -53,6 +92,10 @@ def setup_layout(window_id: str, path: str, layout: str, panes: list[str], comma
 
     pane_ids = list(_list_panes(window_id))
     for pane_id, name in zip(pane_ids, panes):
+        # Set unique pane title based on window name and pane name
+        pane_title = f"{window_name}:{name}" if window_name else name
+        _run(["tmux", "select-pane", "-t", pane_id, "-T", pane_title])
+
         cmd = commands.get(name)
         if cmd:
             _run(["tmux", "send-keys", "-t", pane_id, cmd, "Enter"])
