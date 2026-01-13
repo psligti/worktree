@@ -175,6 +175,9 @@ def run_tui() -> None:
         def _refresh_data(self) -> None:
             self.table.clear()
             config_ok = self._reload_config()
+            if not config_ok:
+                self._rows = []
+                return
             try:
                 records = reindex(self._repo_root, self._config)
             except git.GitError as exc:
