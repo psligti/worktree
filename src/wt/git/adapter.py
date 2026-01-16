@@ -60,7 +60,9 @@ def list_worktrees(repo_root: str) -> list[GitWorktreeEntry]:
 
 
 def list_local_branches(repo_root: str) -> list[str]:
-    output = _run_git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=repo_root)
+    output = _run_git(
+        ["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=repo_root
+    )
     text = output.decode("utf-8", "replace")
     return [line.strip() for line in text.splitlines() if line.strip()]
 
@@ -75,10 +77,31 @@ def add_worktree(
     if detached:
         _run_git(["worktree", "add", "-d", path], cwd=repo_root)
         return
-    command = ["worktree", "add", "-b", branch or "wt/worktree", path]
+
+    command = ["worktree", "add", "-B", branch or "wt/worktree", path]
     if base:
         command.append(base)
-    _run_git(command, cwd=repo_root)
+        _run_git(command, cwd=repo_root)
+        # Verify filesystem created
+        if not Path(path).exists():
+            try:
+                list_out = _run_git(
+                    ["worktree", "list", "--porcelain", "-z"], cwd=repo_root
+                )
+                extra = (
+                    list_out.decode("utf-8", "replace")
+                    if isinstance(list_out, (bytes, bytearray))
+                    else str(list_out)
+                )
+            except Exception:
+                extra = "(no extra context)"
+            raise GitError(
+                f"worktree creation reported success but directory was not created: {path}. Context: {extra}"
+            )
+
+
+def add_worktree_no_branch(repo_root: str, path: str, start_point: str) -> None:
+    _run_git(["worktree", "add", path, start_point], cwd=repo_root)
 
 
 def add_existing_worktree(repo_root: str, path: str, branch: str) -> None:
@@ -131,7 +154,15 @@ def is_dirty(path: str) -> bool:
 
 def get_upstream(path: str) -> Optional[str]:
     result = subprocess.run(
-        ["git", "-C", path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        [
+            "git",
+            "-C",
+            path,
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{u}",
+        ],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -143,7 +174,15 @@ def get_upstream(path: str) -> Optional[str]:
 
 def get_ahead_behind(path: str, upstream: str) -> tuple[int, int]:
     result = subprocess.run(
-        ["git", "-C", path, "rev-list", "--left-right", "--count", f"HEAD...{upstream}"],
+        [
+            "git",
+            "-C",
+            path,
+            "rev-list",
+            "--left-right",
+            "--count",
+            f"HEAD...{upstream}",
+        ],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -182,7 +221,9 @@ def get_behind_main(path: str, main_ref: str) -> int:
     return int(value) if value else 0
 
 
-def compute_git_sync(upstream: Optional[str], ahead: int, behind: int, behind_main: int) -> GitSyncState | None:
+def compute_git_sync(
+    upstream: Optional[str], ahead: int, behind: int, behind_main: int
+) -> GitSyncState | None:
     if upstream is None:
         return "NO_UPSTREAM"
     if ahead > 0 and behind > 0:
@@ -267,7 +308,9 @@ def _split_key_value(token: str) -> tuple[str, Optional[str]]:
 
 
 def _finalize_record(data: dict[str, object]) -> GitWorktreeEntry:
-    branch = _coerce_optional_str(data.get("branch")) if not data.get("detached") else None
+    branch = (
+        _coerce_optional_str(data.get("branch")) if not data.get("detached") else None
+    )
     return GitWorktreeEntry(
         path=str(data.get("path", "")),
         head_sha=str(data.get("head_sha", "")),

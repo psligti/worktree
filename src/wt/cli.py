@@ -193,12 +193,13 @@ def new(
         repos.upsert_worktree(conn, record)
     _record_event(repo_root, record.id, "CreateRequested", "ABSENT", "CREATING")
 
+    base_to_use = base if base is not None else _infer_base_from_repo(repo_root, config)
     try:
         git.add_worktree(
             repo_root,
             path_str,
             branch,
-            base or config.worktrees.default_base,
+            base_to_use,
             detached=False,
         )
         apply_templates(repo_root, path_str, config)
@@ -207,7 +208,18 @@ def new(
         _record_event(
             repo_root, record.id, "CreateFailed", "CREATING", "ERROR", message=str(exc)
         )
-        raise typer.Exit(code=5)
+        current = _current_branch(repo_root)
+        if current:
+            try:
+                git.add_worktree_no_branch(repo_root, path_str, current)
+                apply_templates(repo_root, path_str, config)
+                _record_event(
+                    repo_root, record.id, "CreateSucceeded", "CREATING", "READY"
+                )
+            except Exception as exc2:
+                raise typer.Exit(code=5) from exc2
+        else:
+            raise typer.Exit(code=5)
 
     records = reindex(repo_root, config)
     record = _find_record(records, name)
@@ -832,6 +844,28 @@ def _repo_root() -> str:
     except git.GitError as exc:
         console.print(str(exc))
         raise typer.Exit(code=5)
+
+
+def _current_branch(repo_root: str) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_root, "rev-parse", "--abbrev-ref", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        br = result.stdout.strip()
+        return None if br == "HEAD" else br
+    except Exception:
+        return None
+
+
+def _infer_base_from_repo(repo_root: str, config: WtConfig) -> str:
+    current = _current_branch(repo_root)
+    return current if current else config.worktrees.default_base
 
 
 def _load_config(repo_root: str, profile: Optional[str]) -> WtConfig:
