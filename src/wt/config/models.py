@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +35,29 @@ class OpenConfig(BaseModel):
 
     editor_cmd: List[str] = Field(default_factory=lambda: ["pycharm"])
     prefer_tmux: bool = True
+
+
+class OpenCodeThemesConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    codex: List[str] = Field(default_factory=list)
+    copilot: List[str] = Field(default_factory=list)
+
+    def for_connection(self, connection: Optional[str]) -> List[str]:
+        if connection == "codex":
+            return list(self.codex)
+        if connection == "copilot":
+            return list(self.copilot)
+        return []
+
+
+class OpenCodeConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    connection: Optional[str] = None
+    config_path: str = ".opencode/config.json"
+    themes: OpenCodeThemesConfig = Field(default_factory=OpenCodeThemesConfig)
 
 
 class TmuxLayoutConfig(BaseModel):
@@ -76,6 +99,7 @@ class WtConfig(BaseModel):
     env: EnvConfig = Field(default_factory=EnvConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     open: OpenConfig = Field(default_factory=OpenConfig)
+    opencode: OpenCodeConfig = Field(default_factory=OpenCodeConfig)
     tmux: TmuxConfig = Field(default_factory=TmuxConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
