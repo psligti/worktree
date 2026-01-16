@@ -59,6 +59,14 @@ root_dir = ".agent"
 editor_cmd = ["pycharm"]
 prefer_tmux = true
 
+[opencode]
+enabled = true
+config_path = ".opencode/config.json"
+
+[opencode.themes]
+codex = []
+copilot = []
+
 [tmux]
 session = "repo"
 default_layout = "single"
@@ -130,6 +138,10 @@ ENVRC_TEMPLATE = """
 if [ -f ".env" ]; then
   dotenv .env
 fi
+""".strip()
+
+OPENCODE_TEMPLATE = """
+{}
 """.strip()
 
 
@@ -961,6 +973,7 @@ def _ensure_repo_layout(repo_root: str) -> None:
 
     (templates_dir / "env").mkdir(parents=True, exist_ok=True)
     (templates_dir / "agent").mkdir(parents=True, exist_ok=True)
+    (templates_dir / "opencode").mkdir(parents=True, exist_ok=True)
     (templates_dir / "worktree").mkdir(parents=True, exist_ok=True)
     profiles_dir.mkdir(parents=True, exist_ok=True)
 
@@ -972,6 +985,8 @@ def _ensure_repo_layout(repo_root: str) -> None:
     _write_if_missing(templates_dir / "env" / ".env.base", ENV_TEMPLATE)
     _write_if_missing(templates_dir / "agent" / "context.md", CONTEXT_TEMPLATE)
     _write_if_missing(templates_dir / "agent" / "runbook.md", RUNBOOK_TEMPLATE)
+    _write_if_missing(templates_dir / "opencode" / "codex.json", OPENCODE_TEMPLATE)
+    _write_if_missing(templates_dir / "opencode" / "copilot.json", OPENCODE_TEMPLATE)
     _write_if_missing(templates_dir / "worktree" / ".envrc", ENVRC_TEMPLATE)
 
 

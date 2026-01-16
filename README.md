@@ -90,6 +90,7 @@ wt tui
 ### Config
 Repo-local config lives in `.wt/config/wt.toml` with optional profiles in `.wt/config/profiles/*.toml`.
 Templates are in `.wt/templates/` and applied on create/bootstrap.
+Worktree-local opencode config is generated from `.wt/templates/opencode/{connection}.json` when `opencode` is enabled (set `opencode.connection` in `.wt/config/wt.toml`).
 
 ### TUI
 ```

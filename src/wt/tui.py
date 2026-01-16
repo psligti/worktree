@@ -9,12 +9,12 @@ from typing import Optional
 
 from .bootstrap.runner import BootstrapError, bootstrap_worktree
 from .cli import _ensure_gitignore, _ensure_repo_layout, _normalize_worktree_name
-from .config.loader import config_root, load_config
+from .config.loader import config_root, load_config, set_opencode_connection
 from .config.models import TmuxLayoutConfig
 from .domain.models import RunRecord, WorktreeRecord
 from .domain.status import overall_status
 from .git import adapter as git
-from .ops.doctor import doctor as doctor_check
+from .ops.doctor import doctor as doctor_check, repair_opencode
 from .ops.reindex import reindex
 from .persistence import repos
 from .persistence.db import init_db
@@ -374,12 +374,52 @@ def run_tui() -> None:
                 self._set_status(str(exc))
 
         def action_doctor(self) -> None:
+            if not self._reload_config():
+                return
+            if self._config.opencode.enabled and not self._config.opencode.connection:
+                self.app.push_screen(
+                    PromptScreen("Opencode connection", "codex/copilot"),
+                    self._on_set_opencode_connection,
+                )
+                return
+            self._run_doctor()
+
+        def _on_set_opencode_connection(self, value: str | None) -> None:
+            if value is None:
+                self._set_status("opencode connection required")
+                return
+            connection = value.strip()
+            if not connection:
+                self._set_status("opencode connection required")
+                return
+            try:
+                set_opencode_connection(self._repo_root, connection)
+            except OSError as exc:
+                self._set_status(str(exc))
+                return
+            if not self._reload_config():
+                return
+            self._run_doctor()
+
+        def _run_doctor(self) -> None:
+            try:
+                _ensure_repo_layout(self._repo_root)
+            except OSError as exc:
+                self._set_status(str(exc))
+                return
+            updated = repair_opencode(self._repo_root, self._config)
             issues = doctor_check(self._repo_root, self._config)
+            notes: list[str] = []
+            if updated:
+                notes.append(f"opencode: updated {updated} worktree(s)")
             if not issues:
-                self._set_notes(["No issues found."])
+                if notes:
+                    self._set_notes(notes)
+                else:
+                    self._set_notes(["No issues found."])
                 self._set_status("doctor report")
                 return
-            self._set_notes(issues)
+            self._set_notes(notes + issues)
             self._set_status("doctor report")
 
         def _on_create(self, value: str | None) -> None:
@@ -675,6 +715,14 @@ root_dir = ".agent"
 [open]
 editor_cmd = ["pycharm"]
 prefer_tmux = true
+
+[opencode]
+enabled = true
+config_path = ".opencode/config.json"
+
+[opencode.themes]
+codex = []
+copilot = []
 
 [tmux]
 session = "repo"
