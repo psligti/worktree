@@ -225,3 +225,86 @@ def _run(cmd: list[str]) -> None:
     )
     if result.returncode != 0:
         raise TmuxError(result.stderr.decode("utf-8", "replace").strip())
+
+
+def send_keys(pane_id: str, keys: str, enter: bool = True) -> None:
+    cmd = ["tmux", "send-keys", "-t", pane_id, keys]
+    if enter:
+        cmd.append("Enter")
+    _run(cmd)
+
+
+def send_signal(pane_id: str, signal: str = "C-c") -> None:
+    _run(["tmux", "send-keys", "-t", pane_id, signal])
+
+
+def capture_pane(pane_id: str, lines: int = 100) -> List[str]:
+    return _capture_pane(pane_id, lines)
+
+
+def get_pane_pid(pane_id: str) -> Optional[int]:
+    result = subprocess.run(
+        ["tmux", "display-message", "-t", pane_id, "-p", "#{pane_pid}"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        return None
+    pid_str = result.stdout.decode("utf-8", "replace").strip()
+    try:
+        return int(pid_str)
+    except ValueError:
+        return None
+
+
+def find_pane_by_title(window_id: str, title: str) -> Optional[str]:
+    result = subprocess.run(
+        ["tmux", "list-panes", "-t", window_id, "-F", "#{pane_id}\t#{pane_title}"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.decode("utf-8", "replace").splitlines():
+        if not line.strip():
+            continue
+        pane_id, _, pane_title = line.partition("\t")
+        if pane_title.strip() == title or pane_title.strip().endswith(f":{title}"):
+            return pane_id.strip()
+    return None
+
+
+def split_window(window_id: str, path: str, title: Optional[str] = None) -> str:
+    result = subprocess.run(
+        [
+            "tmux",
+            "split-window",
+            "-t",
+            window_id,
+            "-c",
+            path,
+            "-P",
+            "-F",
+            "#{pane_id}",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise TmuxError(result.stderr.decode("utf-8", "replace").strip())
+    pane_id = result.stdout.decode("utf-8", "replace").strip()
+    if title:
+        _run(["tmux", "select-pane", "-t", pane_id, "-T", title])
+    return pane_id
+
+
+def kill_pane(pane_id: str) -> None:
+    subprocess.run(
+        ["tmux", "kill-pane", "-t", pane_id],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )

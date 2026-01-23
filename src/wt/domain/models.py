@@ -8,10 +8,14 @@ from pydantic import BaseModel, Field
 
 
 WorktreeLifecycle = Literal["ABSENT", "CREATING", "READY", "BROKEN", "REMOVING"]
-BootstrapState = Literal["UNBOOTSTRAPPED", "BOOTSTRAPPING", "BOOTSTRAPPED", "BOOTSTRAP_ERROR"]
+BootstrapState = Literal[
+    "UNBOOTSTRAPPED", "BOOTSTRAPPING", "BOOTSTRAPPED", "BOOTSTRAP_ERROR"
+]
 AgentState = Literal["DETACHED", "ATTACHING", "ATTACHED", "ATTACH_ERROR"]
 RuntimeState = Literal["STOPPED", "STARTING", "RUNNING", "CRASHED", "STOPPING"]
-GitSyncState = Literal["UP_TO_DATE", "BEHIND_MAIN", "AHEAD_MAIN", "DIVERGED", "NO_UPSTREAM"]
+GitSyncState = Literal[
+    "UP_TO_DATE", "BEHIND_MAIN", "AHEAD_MAIN", "DIVERGED", "NO_UPSTREAM"
+]
 
 
 class WorktreeRecord(BaseModel):
@@ -69,3 +73,56 @@ class LockRecord(BaseModel):
     worktree_id: str
     owner: Optional[str] = None
     locked_at: Optional[datetime] = None
+
+
+ServiceStatus = Literal["stopped", "starting", "running", "stopping", "crashed"]
+HealthStatus = Literal["unknown", "healthy", "unhealthy"]
+
+
+class ServiceRecord(BaseModel):
+    id: str
+    worktree_id: str
+    name: str
+    pane_id: Optional[str] = None
+    status: ServiceStatus = "stopped"
+    pid: Optional[int] = None
+    started_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+    last_health_check: Optional[datetime] = None
+    health_status: HealthStatus = "unknown"
+
+
+PullRequestState = Literal["open", "closed", "merged"]
+
+
+class PullRequestRecord(BaseModel):
+    id: str
+    worktree_id: str
+    number: int
+    title: str
+    state: PullRequestState = "open"
+    url: str
+    head_branch: str
+    base_branch: str
+    draft: bool = False
+    mergeable: Optional[bool] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    merged_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+
+
+ContainerStatus = Literal["created", "running", "paused", "stopped", "exited", "dead"]
+
+
+class ContainerRecord(BaseModel):
+    id: str
+    worktree_id: str
+    name: str
+    container_id: str
+    container_name: str
+    image: str
+    status: ContainerStatus = "created"
+    started_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+    ports: Optional[str] = None

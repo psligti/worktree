@@ -18,7 +18,7 @@ from .bootstrap.runner import BootstrapError, bootstrap_worktree
 from .bootstrap.templates import apply_templates
 from .config.loader import load_config
 from .config.models import TmuxLayoutConfig, WtConfig
-from .domain.models import EventRecord, WorktreeRecord
+from .domain.models import EventRecord, PullRequestRecord, WorktreeRecord
 from .run_store import save_run_record
 from .domain.status import overall_status
 from .git import adapter as git
@@ -39,11 +39,26 @@ from .tmux.adapter import (
     setup_layout,
 )
 from .tmux.status import summarize_window
+from .services.manager import ServiceError, ServiceManager
+from .github.adapter import GitHubAdapter, GitHubError
+from .database.manager import DatabaseError, DatabaseManager
+from .containers.manager import ContainerError, ContainerManager
+from .secrets.manager import SecretsError, SecretsManager
 
 
 app = typer.Typer(add_completion=False)
 tmux_app = typer.Typer(add_completion=False)
+svc_app = typer.Typer(add_completion=False)
+pr_app = typer.Typer(add_completion=False)
+db_app = typer.Typer(add_completion=False)
+ctr_app = typer.Typer(add_completion=False)
+secrets_app = typer.Typer(add_completion=False)
 app.add_typer(tmux_app, name="tmux")
+app.add_typer(svc_app, name="svc")
+app.add_typer(pr_app, name="pr")
+app.add_typer(db_app, name="db")
+app.add_typer(ctr_app, name="ctr")
+app.add_typer(secrets_app, name="secrets")
 console = Console()
 
 DEFAULT_CONFIG_TOML = """
@@ -100,15 +115,15 @@ refuse_remove_if_unpushed = true
 
 DEFAULT_PROFILE_TOML = """
 [hooks]
-post_create = ["uv sync"]
-post_switch = ["uv sync"]
+post_create = []
+post_switch = []
 run_checks = []
 """.strip()
 
 UI_PROFILE_TOML = """
 [hooks]
-post_create = ["uv sync", "uv run ui:install"]
-post_switch = ["uv sync"]
+post_create = []
+post_switch = []
 run_checks = []
 
 [env]
@@ -421,6 +436,1053 @@ def tmux_next_waiting_cmd(
             return
     if print_target:
         console.print("")
+
+
+@svc_app.command("start")
+def svc_start_cmd(
+    name: str,
+    service: Optional[str] = typer.Option(None, "--service", "-s", help="Service name"),
+    all_services: bool = typer.Option(False, "--all", "-a", help="Start all services"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Start services for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.services.definitions:
+        console.print("no services defined in config")
+        raise typer.Exit(code=2)
+
+    manager = ServiceManager(repo_root, config)
+    manager.ensure_service_records(record)
+
+    service_name = None if all_services else service
+    try:
+        started = manager.start(record, service_name)
+    except ServiceError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    if started:
+        console.print(f"started: {', '.join(started)}")
+    else:
+        console.print("no services started (already running or none specified)")
+
+
+@svc_app.command("stop")
+def svc_stop_cmd(
+    name: str,
+    service: Optional[str] = typer.Option(None, "--service", "-s", help="Service name"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Stop services for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ServiceManager(repo_root, config)
+    stopped = manager.stop(record, service)
+
+    if stopped:
+        console.print(f"stopped: {', '.join(stopped)}")
+    else:
+        console.print("no services stopped")
+
+
+@svc_app.command("restart")
+def svc_restart_cmd(
+    name: str,
+    service: str = typer.Option(..., "--service", "-s", help="Service name to restart"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Restart a service for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ServiceManager(repo_root, config)
+    try:
+        manager.restart(record, service)
+    except ServiceError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"restarted: {service}")
+
+
+@svc_app.command("status")
+def svc_status_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Show service status for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ServiceManager(repo_root, config)
+    services = manager.status(record)
+
+    if not services:
+        console.print("no services tracked")
+        return
+
+    table = Table(title=f"Services for {name}")
+    table.add_column("name")
+    table.add_column("status")
+    table.add_column("health")
+    table.add_column("pane")
+    table.add_column("started")
+
+    for svc in services:
+        started = (
+            svc.started_at.isoformat(sep=" ", timespec="minutes")
+            if svc.started_at
+            else "-"
+        )
+        table.add_row(
+            svc.name,
+            svc.status,
+            svc.health_status,
+            svc.pane_id or "-",
+            started,
+        )
+    console.print(table)
+
+
+@svc_app.command("logs")
+def svc_logs_cmd(
+    name: str,
+    service: str = typer.Option(..., "--service", "-s", help="Service name"),
+    lines: int = typer.Option(50, "--lines", "-n", help="Number of lines"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Show logs for a service."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ServiceManager(repo_root, config)
+    log_lines = manager.logs(record, service, lines)
+
+    if not log_lines:
+        console.print(f"no logs available for {service}")
+        return
+
+    for line in log_lines:
+        console.print(line)
+
+
+@pr_app.command("create")
+def pr_create_cmd(
+    name: str,
+    title: Optional[str] = typer.Option(None, "--title", "-t", help="PR title"),
+    body: Optional[str] = typer.Option(None, "--body", "-b", help="PR body"),
+    base: str = typer.Option("main", "--base", help="Base branch"),
+    draft: bool = typer.Option(False, "--draft", "-d", help="Create as draft"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Create a pull request for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    pr_title = title or record.purpose or f"Feature: {record.name}"
+    pr_body = body or ""
+
+    gh = GitHubAdapter(str(record.path))
+    try:
+        pr = gh.create_pr(
+            title=pr_title,
+            body=pr_body,
+            base=base,
+            head=record.branch,
+            draft=draft,
+        )
+    except GitHubError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    pr_record = PullRequestRecord(
+        id=str(uuid.uuid4()),
+        worktree_id=record.id,
+        number=pr.number,
+        title=pr.title,
+        state=pr.state,
+        url=pr.url,
+        head_branch=pr.head_branch,
+        base_branch=pr.base_branch,
+        draft=pr.draft,
+        mergeable=pr.mergeable,
+    )
+    repos.upsert_pull_request(repo_root, pr_record)
+
+    console.print(f"created PR #{pr.number}: {pr.url}")
+
+
+@pr_app.command("status")
+def pr_status_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Show PR status for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    gh = GitHubAdapter(str(record.path))
+    pr = gh.get_pr_for_branch(record.branch or f"wt/{name}")
+
+    if not pr:
+        console.print(f"no PR found for {name}")
+        return
+
+    checks = gh.pr_checks(pr.number)
+
+    table = Table(title=f"PR #{pr.number}: {pr.title}")
+    table.add_column("field")
+    table.add_column("value")
+    table.add_row("state", pr.state)
+    table.add_row("draft", "yes" if pr.draft else "no")
+    table.add_row(
+        "mergeable", str(pr.mergeable) if pr.mergeable is not None else "unknown"
+    )
+    table.add_row("base", pr.base_branch)
+    table.add_row("head", pr.head_branch)
+    table.add_row("url", pr.url)
+    console.print(table)
+
+    if checks:
+        check_table = Table(title="Checks")
+        check_table.add_column("name")
+        check_table.add_column("state")
+        check_table.add_column("conclusion")
+        for check in checks:
+            check_table.add_row(
+                check.get("name", "-"),
+                check.get("state", "-"),
+                check.get("conclusion", "-"),
+            )
+        console.print(check_table)
+
+
+@pr_app.command("merge")
+def pr_merge_cmd(
+    name: str,
+    strategy: str = typer.Option(
+        "squash", "--strategy", "-s", help="merge|squash|rebase"
+    ),
+    delete_branch: bool = typer.Option(True, "--delete-branch/--no-delete-branch"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Merge a pull request."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    gh = GitHubAdapter(str(record.path))
+    pr = gh.get_pr_for_branch(record.branch or f"wt/{name}")
+
+    if not pr:
+        console.print(f"no PR found for {name}")
+        raise typer.Exit(code=1)
+
+    if pr.state != "open":
+        console.print(f"PR #{pr.number} is not open (state: {pr.state})")
+        raise typer.Exit(code=1)
+
+    if strategy not in ("merge", "squash", "rebase"):
+        console.print(f"invalid strategy: {strategy}")
+        raise typer.Exit(code=2)
+
+    try:
+        gh.merge_pr(pr.number, strategy=strategy, delete_branch=delete_branch)
+    except GitHubError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    now = datetime.now(timezone.utc).isoformat()
+    repos.update_pull_request_state(
+        repo_root, record.id, pr.number, "merged", merged_at=now
+    )
+
+    console.print(f"merged PR #{pr.number}")
+
+
+@pr_app.command("close")
+def pr_close_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Close a pull request without merging."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    gh = GitHubAdapter(str(record.path))
+    pr = gh.get_pr_for_branch(record.branch or f"wt/{name}")
+
+    if not pr:
+        console.print(f"no PR found for {name}")
+        raise typer.Exit(code=1)
+
+    try:
+        gh.close_pr(pr.number)
+    except GitHubError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    now = datetime.now(timezone.utc).isoformat()
+    repos.update_pull_request_state(
+        repo_root, record.id, pr.number, "closed", closed_at=now
+    )
+
+    console.print(f"closed PR #{pr.number}")
+
+
+@pr_app.command("open")
+def pr_open_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Open a pull request in the browser."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    gh = GitHubAdapter(str(record.path))
+    pr = gh.get_pr_for_branch(record.branch or f"wt/{name}")
+
+    if not pr:
+        console.print(f"no PR found for {name}")
+        raise typer.Exit(code=1)
+
+    try:
+        gh.open_pr_in_browser(pr.number)
+    except GitHubError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"opened PR #{pr.number} in browser")
+
+
+@pr_app.command("ready")
+def pr_ready_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Mark a draft PR as ready for review."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    gh = GitHubAdapter(str(record.path))
+    pr = gh.get_pr_for_branch(record.branch or f"wt/{name}")
+
+    if not pr:
+        console.print(f"no PR found for {name}")
+        raise typer.Exit(code=1)
+
+    if not pr.draft:
+        console.print(f"PR #{pr.number} is not a draft")
+        raise typer.Exit(code=1)
+
+    try:
+        gh.pr_ready(pr.number)
+    except GitHubError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"marked PR #{pr.number} as ready for review")
+
+
+@pr_app.command("ls")
+def pr_ls_cmd(
+    limit: int = typer.Option(20, "--limit", "-n"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """List tracked pull requests."""
+    repo_root = _repo_root()
+    init_db(repo_root)
+
+    prs = repos.list_pull_requests(repo_root, limit=limit)
+
+    if not prs:
+        console.print("no pull requests tracked")
+        return
+
+    table = Table(title="Pull Requests")
+    table.add_column("#")
+    table.add_column("title")
+    table.add_column("state")
+    table.add_column("branch")
+    table.add_column("updated")
+
+    for pr in prs:
+        updated = pr.updated_at.isoformat(sep=" ", timespec="minutes")
+        table.add_row(
+            str(pr.number),
+            pr.title[:50] + "..." if len(pr.title) > 50 else pr.title,
+            pr.state,
+            pr.head_branch,
+            updated,
+        )
+    console.print(table)
+
+
+@db_app.command("create")
+def db_create_cmd(
+    name: str,
+    db_type: str = typer.Option("sqlite", "--type", "-t", help="postgres|sqlite"),
+    suffix: str = typer.Option("", "--suffix", "-s", help="Database name suffix"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Create a database for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.database.enabled:
+        console.print("database isolation is not enabled in config")
+        raise typer.Exit(code=2)
+
+    if db_type not in ("postgres", "sqlite"):
+        console.print(f"invalid database type: {db_type}")
+        raise typer.Exit(code=2)
+
+    manager = DatabaseManager(repo_root, config)
+    try:
+        db_name = manager.create_database(record, db_type, suffix)  # type: ignore[arg-type]
+    except DatabaseError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"created {db_type} database: {db_name}")
+
+
+@db_app.command("drop")
+def db_drop_cmd(
+    name: str,
+    db_type: str = typer.Option("sqlite", "--type", "-t", help="postgres|sqlite"),
+    suffix: str = typer.Option("", "--suffix", "-s", help="Database name suffix"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Drop a database for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if db_type not in ("postgres", "sqlite"):
+        console.print(f"invalid database type: {db_type}")
+        raise typer.Exit(code=2)
+
+    manager = DatabaseManager(repo_root, config)
+    try:
+        manager.drop_database(record, db_type, suffix)  # type: ignore[arg-type]
+    except DatabaseError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    db_name = manager.db_name_for_worktree(record, suffix)
+    console.print(f"dropped {db_type} database: {db_name}")
+
+
+@db_app.command("snapshot")
+def db_snapshot_cmd(
+    name: str,
+    db_type: str = typer.Option("sqlite", "--type", "-t", help="postgres|sqlite"),
+    suffix: str = typer.Option("", "--suffix", "-s", help="Database name suffix"),
+    snapshot_name: Optional[str] = typer.Option(
+        None, "--name", "-n", help="Snapshot name"
+    ),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Create a snapshot of a worktree database."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if db_type not in ("postgres", "sqlite"):
+        console.print(f"invalid database type: {db_type}")
+        raise typer.Exit(code=2)
+
+    manager = DatabaseManager(repo_root, config)
+    try:
+        output_path = manager.snapshot(record, db_type, suffix, snapshot_name)  # type: ignore[arg-type]
+    except DatabaseError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"created snapshot: {output_path}")
+
+
+@db_app.command("restore")
+def db_restore_cmd(
+    name: str,
+    snapshot: str = typer.Option(..., "--snapshot", help="Path to snapshot file"),
+    db_type: str = typer.Option("sqlite", "--type", "-t", help="postgres|sqlite"),
+    suffix: str = typer.Option("", "--suffix", "-s", help="Database name suffix"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Restore a worktree database from a snapshot."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if db_type not in ("postgres", "sqlite"):
+        console.print(f"invalid database type: {db_type}")
+        raise typer.Exit(code=2)
+
+    snapshot_path = Path(snapshot)
+    manager = DatabaseManager(repo_root, config)
+    try:
+        manager.restore(record, db_type, snapshot_path, suffix)  # type: ignore[arg-type]
+    except DatabaseError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    db_name = manager.db_name_for_worktree(record, suffix)
+    console.print(f"restored {db_type} database {db_name} from {snapshot_path}")
+
+
+@db_app.command("clone")
+def db_clone_cmd(
+    source: str,
+    target: str,
+    db_type: str = typer.Option("sqlite", "--type", "-t", help="postgres|sqlite"),
+    suffix: str = typer.Option("", "--suffix", "-s", help="Database name suffix"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Clone a database from one worktree to another."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    source_record = _find_record(records, source)
+    target_record = _find_record(records, target)
+
+    if db_type not in ("postgres", "sqlite"):
+        console.print(f"invalid database type: {db_type}")
+        raise typer.Exit(code=2)
+
+    manager = DatabaseManager(repo_root, config)
+    try:
+        target_name = manager.clone_database(
+            source_record, target_record, db_type, suffix
+        )  # type: ignore[arg-type]
+    except DatabaseError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"cloned {db_type} database to: {target_name}")
+
+
+@db_app.command("reset")
+def db_reset_cmd(
+    name: str,
+    db_type: str = typer.Option("sqlite", "--type", "-t", help="postgres|sqlite"),
+    suffix: str = typer.Option("", "--suffix", "-s", help="Database name suffix"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Reset (drop and recreate) a worktree database."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if db_type not in ("postgres", "sqlite"):
+        console.print(f"invalid database type: {db_type}")
+        raise typer.Exit(code=2)
+
+    manager = DatabaseManager(repo_root, config)
+    try:
+        manager.reset_database(record, db_type, suffix)  # type: ignore[arg-type]
+    except DatabaseError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    db_name = manager.db_name_for_worktree(record, suffix)
+    console.print(f"reset {db_type} database: {db_name}")
+
+
+@db_app.command("ls")
+def db_ls_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """List database snapshots for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = DatabaseManager(repo_root, config)
+    snapshots = manager.list_snapshots(record)
+
+    if not snapshots:
+        console.print(f"no snapshots for {name}")
+        return
+
+    table = Table(title=f"Snapshots for {name}")
+    table.add_column("name")
+    table.add_column("size")
+    table.add_column("modified")
+
+    for snapshot in snapshots:
+        stat = snapshot.stat()
+        size = f"{stat.st_size / 1024:.1f} KB"
+        modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(
+            sep=" ", timespec="minutes"
+        )
+        table.add_row(snapshot.name, size, modified)
+    console.print(table)
+
+
+@ctr_app.command("start")
+def ctr_start_cmd(
+    name: str,
+    service: Optional[str] = typer.Option(
+        None, "--service", "-s", help="Container service name"
+    ),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Start containers for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.containers.enabled:
+        console.print("container support is not enabled in config")
+        raise typer.Exit(code=2)
+
+    manager = ContainerManager(repo_root, config)
+    try:
+        started = manager.start(record, service)
+    except ContainerError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    if started:
+        console.print(f"started: {', '.join(started)}")
+    else:
+        console.print("no containers started (already running or none specified)")
+
+
+@ctr_app.command("stop")
+def ctr_stop_cmd(
+    name: str,
+    service: Optional[str] = typer.Option(
+        None, "--service", "-s", help="Container service name"
+    ),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Stop containers for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ContainerManager(repo_root, config)
+    try:
+        stopped = manager.stop(record, service)
+    except ContainerError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    if stopped:
+        console.print(f"stopped: {', '.join(stopped)}")
+    else:
+        console.print("no containers stopped")
+
+
+@ctr_app.command("rm")
+def ctr_rm_cmd(
+    name: str,
+    service: Optional[str] = typer.Option(
+        None, "--service", "-s", help="Container service name"
+    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Force remove"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Remove containers for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ContainerManager(repo_root, config)
+    try:
+        removed = manager.rm(record, service, force=force)
+    except ContainerError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    if removed:
+        console.print(f"removed: {', '.join(removed)}")
+    else:
+        console.print("no containers removed")
+
+
+@ctr_app.command("status")
+def ctr_status_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Show container status for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ContainerManager(repo_root, config)
+    containers = manager.status(record)
+
+    if not containers:
+        console.print("no containers tracked")
+        return
+
+    table = Table(title=f"Containers for {name}")
+    table.add_column("name")
+    table.add_column("image")
+    table.add_column("status")
+    table.add_column("container")
+    table.add_column("started")
+
+    for ctr in containers:
+        started = (
+            ctr.started_at.isoformat(sep=" ", timespec="minutes")
+            if ctr.started_at
+            else "-"
+        )
+        table.add_row(
+            ctr.name,
+            ctr.image,
+            ctr.status,
+            ctr.container_name,
+            started,
+        )
+    console.print(table)
+
+
+@ctr_app.command("ps")
+def ctr_ps_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """List running containers for a worktree (live docker/podman ps)."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ContainerManager(repo_root, config)
+    try:
+        containers = manager.ps(record)
+    except Exception as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    if not containers:
+        console.print("no containers found")
+        return
+
+    table = Table(title=f"Containers for {name}")
+    table.add_column("id")
+    table.add_column("name")
+    table.add_column("image")
+    table.add_column("status")
+    table.add_column("ports")
+
+    for ctr in containers:
+        table.add_row(ctr.id[:12], ctr.name, ctr.image, ctr.status, ctr.ports or "-")
+    console.print(table)
+
+
+@ctr_app.command("logs")
+def ctr_logs_cmd(
+    name: str,
+    service: str = typer.Option(..., "--service", "-s", help="Container service name"),
+    lines: int = typer.Option(100, "--lines", "-n", help="Number of lines"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Show logs for a container."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ContainerManager(repo_root, config)
+    log_lines = manager.logs(record, service, tail=lines)
+
+    if not log_lines:
+        console.print(f"no logs available for {service}")
+        return
+
+    for line in log_lines:
+        console.print(line)
+
+
+@ctr_app.command("exec")
+def ctr_exec_cmd(
+    name: str,
+    service: str = typer.Option(..., "--service", "-s", help="Container service name"),
+    command: list[str] = typer.Argument(..., help="Command to run"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Execute a command in a container."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ContainerManager(repo_root, config)
+    try:
+        result = manager.exec(record, service, command)
+    except ContainerError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    if result.stdout:
+        console.print(result.stdout.rstrip())
+    if result.stderr:
+        console.print(result.stderr.rstrip())
+    if result.returncode != 0:
+        raise typer.Exit(code=result.returncode)
+
+
+@ctr_app.command("cleanup")
+def ctr_cleanup_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Remove all containers and network for a worktree."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    manager = ContainerManager(repo_root, config)
+    try:
+        manager.cleanup(record)
+    except ContainerError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"cleaned up containers for {name}")
+
+
+@secrets_app.command("get")
+def secrets_get_cmd(
+    name: str,
+    key: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Get a secret value."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.secrets.enabled:
+        console.print("secrets management is not enabled in config")
+        raise typer.Exit(code=2)
+
+    manager = SecretsManager(repo_root, config)
+    value = manager.get(record, key)
+
+    if value is None:
+        console.print(f"secret not found: {key}")
+        raise typer.Exit(code=1)
+
+    console.print(value)
+
+
+@secrets_app.command("set")
+def secrets_set_cmd(
+    name: str,
+    key: str,
+    value: Optional[str] = typer.Argument(None),
+    stdin: bool = typer.Option(False, "--stdin", help="Read value from stdin"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Set a secret value."""
+    import sys
+
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.secrets.enabled:
+        console.print("secrets management is not enabled in config")
+        raise typer.Exit(code=2)
+
+    if stdin:
+        secret_value = sys.stdin.read().strip()
+    elif value is not None:
+        secret_value = value
+    else:
+        console.print("provide a value or use --stdin")
+        raise typer.Exit(code=2)
+
+    manager = SecretsManager(repo_root, config)
+    try:
+        manager.set(record, key, secret_value)
+    except SecretsError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"set secret: {key}")
+
+
+@secrets_app.command("delete")
+def secrets_delete_cmd(
+    name: str,
+    key: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Delete a secret."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.secrets.enabled:
+        console.print("secrets management is not enabled in config")
+        raise typer.Exit(code=2)
+
+    manager = SecretsManager(repo_root, config)
+    if not manager.exists(record, key):
+        console.print(f"secret not found: {key}")
+        raise typer.Exit(code=1)
+
+    manager.delete(record, key)
+    console.print(f"deleted secret: {key}")
+
+
+@secrets_app.command("ls")
+def secrets_ls_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """List secret keys."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.secrets.enabled:
+        console.print("secrets management is not enabled in config")
+        raise typer.Exit(code=2)
+
+    manager = SecretsManager(repo_root, config)
+    keys = manager.list_keys(record)
+
+    if not keys:
+        console.print("no secrets stored")
+        return
+
+    for key in sorted(keys):
+        console.print(key)
+
+
+@secrets_app.command("sync")
+def secrets_sync_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Sync secrets to worktree .env file."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.secrets.enabled:
+        console.print("secrets management is not enabled in config")
+        raise typer.Exit(code=2)
+
+    manager = SecretsManager(repo_root, config)
+    try:
+        count = manager.sync_to_env(record)
+    except SecretsError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(f"synced {count} secrets to {config.env.dotenv_file}")
+
+
+@secrets_app.command("check")
+def secrets_check_cmd(
+    name: str,
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Check for missing required secrets."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+
+    if not config.secrets.enabled:
+        console.print("secrets management is not enabled in config")
+        raise typer.Exit(code=2)
+
+    manager = SecretsManager(repo_root, config)
+    missing = manager.check_required(record)
+
+    if not missing:
+        console.print("all required secrets present")
+        return
+
+    console.print(f"missing required secrets: {', '.join(missing)}")
+    raise typer.Exit(code=1)
 
 
 @app.command("purpose")
