@@ -23,6 +23,7 @@ from .run_store import save_run_record
 from .domain.status import overall_status
 from .git import adapter as git
 from .ops.doctor import doctor as doctor_check
+from .ops.gc import GcCandidate, select_gc_candidates
 from .ops.reindex import reindex
 from .persistence import repos
 from .persistence.db import connect, init_db
@@ -297,6 +298,77 @@ def add_cmd(
         _open(repo_root, record, config, None, editor=True)
 
     console.print(f"added worktree {name} from {branch}")
+
+
+@app.command("clone")
+def clone_cmd(
+    source: str,
+    name: str,
+    branch: Optional[str] = typer.Option(None, "--branch"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+    open_window: bool = typer.Option(False, "--open"),
+    bootstrap: bool = typer.Option(False, "--bootstrap"),
+    purpose: Optional[str] = typer.Option(None, "--purpose"),
+) -> None:
+    """Clone a worktree from an existing one."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+
+    records = reindex(repo_root, config)
+    source_record = _find_record(records, source)
+
+    name = _normalize_worktree_name(name)
+    if not name:
+        console.print("invalid worktree name")
+        raise typer.Exit(code=2)
+
+    worktree_root = Path(repo_root) / config.worktrees.root
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    path = worktree_root / name
+    if path.exists():
+        console.print(f"worktree path already exists: {path}")
+        raise typer.Exit(code=2)
+
+    branch_name = branch or f"wt/{name}"
+    base_ref = source_record.head_sha or source_record.branch
+    if not base_ref:
+        console.print(f"unable to clone {source}: missing head sha and branch")
+        raise typer.Exit(code=5)
+
+    record = _seed_record(
+        path, name, branch_name, config, purpose or source_record.purpose
+    )
+    with connect(repo_root) as conn:
+        repos.upsert_worktree(conn, record)
+    _record_event(repo_root, record.id, "CreateRequested", "ABSENT", "CREATING")
+
+    try:
+        git.add_worktree(
+            repo_root,
+            str(path),
+            branch_name,
+            base_ref,
+            detached=False,
+        )
+        apply_templates(repo_root, str(path), config)
+        _record_event(repo_root, record.id, "CreateSucceeded", "CREATING", "READY")
+    except git.GitError as exc:
+        _record_event(
+            repo_root, record.id, "CreateFailed", "CREATING", "ERROR", message=str(exc)
+        )
+        raise typer.Exit(code=5)
+
+    records = reindex(repo_root, config)
+    record = _find_record(records, name)
+    _run_hooks("post_create", config.hooks.post_create, repo_root, record.path)
+
+    if bootstrap:
+        _bootstrap(repo_root, record, config)
+    if open_window:
+        _open(repo_root, record, config, None, editor=True)
+
+    console.print(f"cloned worktree {name} from {source}")
 
 
 @app.command("open")
@@ -1872,6 +1944,84 @@ def doctor_cmd(profile: Optional[str] = typer.Option(None, "--profile")) -> None
         return
     for issue in issues:
         console.print(issue)
+
+
+@app.command("gc")
+def gc_cmd(
+    inactive_days: Optional[int] = typer.Option(None, "--inactive-days"),
+    include_absent: bool = typer.Option(False, "--include-absent"),
+    dry_run: bool = typer.Option(True, "--dry-run/--apply"),
+    force: bool = typer.Option(False, "--force"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    """Garbage collect worktrees by criteria."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, profile)
+    init_db(repo_root)
+    records = reindex(repo_root, config)
+    locked = {lock.worktree_id for lock in repos.list_locks(repo_root)}
+
+    candidates = select_gc_candidates(
+        records,
+        locked_ids=locked,
+        inactive_days=inactive_days,
+        include_absent=include_absent,
+    )
+
+    if not candidates:
+        console.print("no worktrees matched gc criteria")
+        return
+
+    table = Table(title="GC Candidates")
+    table.add_column("name")
+    table.add_column("reason")
+    table.add_column("last_accessed")
+    table.add_column("path")
+
+    for candidate in candidates:
+        record = candidate.record
+        last_seen = record.last_accessed_at or record.created_at
+        table.add_row(
+            record.name,
+            candidate.reason,
+            last_seen.isoformat(sep=" ", timespec="minutes"),
+            str(record.path),
+        )
+    console.print(table)
+
+    if dry_run:
+        return
+
+    removed = 0
+    for candidate in candidates:
+        record = candidate.record
+        if record.lifecycle == "ABSENT":
+            repos.update_worktree_state(repo_root, record.id, lifecycle="ABSENT")
+            _record_event(repo_root, record.id, "GcPruned", None, "ABSENT")
+            removed += 1
+            continue
+
+        if config.safety.refuse_remove_if_dirty and record.git_dirty and not force:
+            console.print(f"skipping {record.name}: dirty worktree")
+            continue
+        if config.safety.refuse_remove_if_unpushed and record.ahead > 0 and not force:
+            console.print(f"skipping {record.name}: unpushed commits")
+            continue
+
+        _run_hooks("pre_remove", config.hooks.pre_remove, repo_root, record.path)
+        try:
+            git.remove_worktree(repo_root, str(record.path), force=force)
+        except git.GitError as exc:
+            _record_event(
+                repo_root, record.id, "GcFailed", None, None, message=str(exc)
+            )
+            console.print(f"gc failed for {record.name}: {exc}")
+            continue
+
+        _record_event(repo_root, record.id, "GcRemoved", None, "ABSENT")
+        removed += 1
+
+    console.print(f"gc removed {removed} worktree(s)")
 
 
 @app.command("api")

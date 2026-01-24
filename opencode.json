@@ -7,5 +7,14 @@
   },
   "model": "opencode/glm-4.7-free", // Your main project model
   "small_model": "opencode/glm-4.7-free", // For lightweight tasks
-  "theme": "everforest"
+  "theme": "everforest",
+  "lsp": {
+    "ty": {
+      "command": ["ty", "server"],
+      "extensions": [".py", ".pyi"]
+    },
+    "pyright": {
+      "disabled": true
+    }
+  }
 }
