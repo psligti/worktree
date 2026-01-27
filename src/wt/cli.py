@@ -25,6 +25,7 @@ from .git import adapter as git
 from .ops.doctor import doctor as doctor_check
 from .ops.gc import GcCandidate, select_gc_candidates
 from .ops.reindex import reindex
+from .ops.skills import install_skills
 from .persistence import repos
 from .persistence.db import connect, init_db
 from .tmux.adapter import (
@@ -177,6 +178,57 @@ def init() -> None:
     init_db(repo_root)
     _ensure_gitignore(repo_root)
     console.print("initialized .wt configuration and database")
+
+
+@app.command("install-skills")
+def install_skills_cmd(
+    global_only: bool = typer.Option(
+        False, "--global", help="Install to global XDG skills directory only"
+    ),
+    local_only: bool = typer.Option(
+        False,
+        "--local-only",
+        help="Install to local worktrees and templates only (skip global)",
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing skill files"),
+) -> None:
+    """Install OpenCode skills to global and/or local targets."""
+    repo_root = _repo_root()
+    config = _load_config(repo_root, None)
+
+    try:
+        results = install_skills(
+            repo_root=repo_root,
+            config=config,
+            global_only=global_only,
+            local_only=local_only,
+            force=force,
+        )
+
+        # Build summary message
+        messages = []
+
+        if results.get("created", 0) > 0:
+            messages.append(f"Installed {results['created']} skills")
+        if results.get("skipped", 0) > 0:
+            messages.append(f"Skipped {results['skipped']} existing skills")
+        if results.get("overwritten", 0) > 0:
+            messages.append(f"Overwritten {results['overwritten']} skills")
+        if results.get("errors", 0) > 0:
+            messages.append(f"Encountered {results['errors']} errors")
+
+        summary = "; ".join(messages)
+        console.print(summary)
+
+        if results.get("errors", 0) > 0:
+            raise typer.Exit(code=1)
+
+    except (OSError, IOError) as exc:
+        console.print(f"Failed to install skills: {exc}")
+        raise typer.Exit(code=1)
+    except Exception as exc:
+        console.print(f"Unexpected error: {exc}")
+        raise typer.Exit(code=1)
 
 
 @app.command("new")

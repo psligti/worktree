@@ -130,3 +130,7 @@ export const NotificationPlugin = async ({ $, worktree }) => {
 }
 ```
 The worktree TUI and tmux status line will treat any pane under that worktree as waiting while the marker exists.
+
+## OpenCode Skills
+
+This repository includes OpenCode skills that help AI agents work with the `wt` CLI. Skills cover the full worktree workflow (init, new, add, open, sync, land, rm, ls, doctor) and can be installed with `wt install-skills`. See [INSTALL_SKILLS.md](INSTALL_SKILLS.md) for complete installation instructions and usage examples.

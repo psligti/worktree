@@ -8,7 +8,17 @@ from typing import Any
 from ..config.models import WtConfig
 
 
-def apply_templates(repo_root: str, worktree_path: str, config: WtConfig) -> None:
+def apply_templates(repo_root: str, worktree_path: str, config: WtConfig) -> int:
+    """Apply templates to a newly created worktree.
+
+    Args:
+        repo_root: Path to the repository root.
+        worktree_path: Path to the worktree directory.
+        config: Worktree configuration.
+
+    Returns:
+        Number of skills installed to the worktree.
+    """
     templates_root = Path(repo_root) / ".wt" / "templates"
     target_root = Path(worktree_path)
 
@@ -31,6 +41,8 @@ def apply_templates(repo_root: str, worktree_path: str, config: WtConfig) -> Non
         )
 
     apply_opencode_config(repo_root, worktree_path, config)
+
+    return _apply_skills(templates_root, target_root)
 
 
 def apply_opencode_config(repo_root: str, worktree_path: str, config: WtConfig) -> bool:
@@ -110,3 +122,31 @@ def _copy_if_missing(src: Path, dst: Path) -> None:
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
+
+
+def _apply_skills(templates_root: Path, target_root: Path) -> int:
+    skills_installed = 0
+    source_skills = templates_root / "skills"
+    target_skills = target_root / ".opencode" / "skills"
+
+    if not source_skills.exists():
+        return skills_installed
+
+    target_skills.mkdir(parents=True, exist_ok=True)
+
+    for skill_dir in source_skills.iterdir():
+        if not skill_dir.is_dir():
+            continue
+
+        dest_dir = target_skills / skill_dir.name
+
+        if dest_dir.exists():
+            continue
+
+        try:
+            shutil.copytree(skill_dir, dest_dir)
+            skills_installed += 1
+        except OSError:
+            continue
+
+    return skills_installed
